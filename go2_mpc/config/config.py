@@ -77,7 +77,7 @@ def default_config() -> SystemConfig:
         ),
         mpc=MPCConfig(
             mass=15.2,
-            inertia=np.diag([0.1, 0.1, 0.02]),
+            inertia=np.diag([0.18, 0.35, 0.3]),
             horizon=10,
             dt=0.03,
             Q=np.diag([1, 5, 100, 3, 10, 0.1, 5, 5, 12, 2, 3, 2]),
