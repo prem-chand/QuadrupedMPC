@@ -13,6 +13,26 @@ import numpy as np
 import mujoco
 import mujoco.viewer
 
+import logging
+import json
+
+
+def setup_debug_logger(filename="monolithic_debug.log"):
+    logger = logging.getLogger("MPC_DEBUG")
+    logger.setLevel(logging.INFO)
+
+    handler = logging.FileHandler(filename, mode="w")
+    handler.setLevel(logging.INFO)
+
+    formatter = logging.Formatter("%(message)s")
+    handler.setFormatter(formatter)
+
+    logger.addHandler(handler)
+    logger.propagate = False
+
+    return logger
+
+
 # Helper class to manage keyboard input
 
 
@@ -70,6 +90,26 @@ def main():
     """
     Main simulation loop for the Unitree Go2 robot using MPC and WBC.
     """
+    debug_logger = setup_debug_logger()
+    DEBUG_EVERY = 50   # log every N control steps
+
+    def debug_log(tag, step, **kwargs):
+        if step % DEBUG_EVERY != 0:
+            return
+
+        payload = {
+            "step": step,
+            "tag": tag,
+        }
+
+        for k, v in kwargs.items():
+            if isinstance(v, np.ndarray):
+                payload[k] = v.tolist()
+            else:
+                payload[k] = v
+
+        debug_logger.info(json.dumps(payload))
+
     # ============================
     # 1. CONFIGURATION
     # ============================
@@ -111,7 +151,6 @@ def main():
                                       name) for name in ['FL_hip', 'FR_hip', 'RL_hip', 'RR_hip']]
     for i in range(4):
         print(i, model.body(hip_body_ids[i]).name)
-
 
     # print("hip body ids: ", hip_body_ids)
     # hip_pos_world = [data.xpos[hip_body_ids[i]] for i in range(4)]
@@ -264,6 +303,12 @@ def main():
                 # Get state [Pos, Eu, Vel, Omega] and Feet Rel Positions
                 state, foot_pos_rel = estimator.get_robot_state()
                 current_time = data.time
+                debug_log(
+                    "state_estimate",
+                    step_count,
+                    state=state.copy(),
+                    foot_pos_rel=foot_pos_rel.copy(),
+                )
 
                 # --- 2. USER INPUT PROCESSING ---
                 # Smooth velocity commands for stability (in-place update)
@@ -297,6 +342,11 @@ def main():
                     # Copy to float buffer
                     np.copyto(contact_schedule_float, contact_schedule)
                 current_contact = contact_schedule_float[0, :]
+                debug_log(
+                    "contact_schedule",
+                    step_count,
+                    contact=current_contact.copy(),
+                )
 
                 # --- 4. MPC (33 Hz) ---
                 if mpc_counter % MPC_DECIMATION == 0:
@@ -312,6 +362,20 @@ def main():
                     # Returns (12,) forces - use pre-converted float buffer
                     mpc_f = mpc.solve(
                         state, ref_traj, contact_schedule_float, foot_pos_body)
+                    debug_log(
+                        "mpc_input",
+                        step_count,
+                        state=state.copy(),
+                        ref=ref_traj.copy(),
+                        contact=contact_schedule_float.copy(),
+                        foot_body=foot_pos_body.copy(),
+                    )
+
+                    debug_log(
+                        "mpc_output",
+                        step_count,
+                        forces=current_forces.copy(),
+                    )
 
                     # Store for WBC (in-place copy to avoid allocation)
                     np.copyto(current_forces, mpc_f)
@@ -321,7 +385,6 @@ def main():
                 # Smooth forces to reduce jerking at gait transitions
                 smoothed_forces = FORCE_SMOOTH_ALPHA * current_forces + \
                     (1 - FORCE_SMOOTH_ALPHA) * smoothed_forces
-
 
                 for i in range(4):
                     if current_contact[i] == 1:
@@ -344,13 +407,16 @@ def main():
                         vel_error_y = v_cmd_body[1] - v_current_body[1]
 
                         p_offset_body = np.array([
-                            v_current_body[0] * T_stance / 2 + k_raibert * vel_error_x,
-                            v_current_body[1] * T_stance / 2 + k_raibert * vel_error_y
+                            v_current_body[0] * T_stance /
+                            2 + k_raibert * vel_error_x,
+                            v_current_body[1] * T_stance /
+                            2 + k_raibert * vel_error_y
                             + HIP_SIDE_SIGNS[i] * HIP_LINK_LATERAL,
                             0.0
                         ])
                         MAX_STEP = 0.25
-                        np.clip(p_offset_body[:2], -MAX_STEP, MAX_STEP, out=p_offset_body[:2])
+                        np.clip(p_offset_body[:2], -MAX_STEP,
+                                MAX_STEP, out=p_offset_body[:2])
 
                         # Rotate body offset to world frame
                         p_offset_world = R_z @ p_offset_body
@@ -362,8 +428,10 @@ def main():
                         swing_end_pos[i][2] = 0.02
 
                         # Set world-frame waypoints on Bezier trajectory
-                        foot_swing_trajectories[i].set_initial_position(swing_start_pos[i])
-                        foot_swing_trajectories[i].set_final_position(swing_end_pos[i])
+                        foot_swing_trajectories[i].set_initial_position(
+                            swing_start_pos[i])
+                        foot_swing_trajectories[i].set_final_position(
+                            swing_end_pos[i])
                 # --- 6. WHOLE BODY CONTROL (Stance) ---
                 # Reuse pre-allocated forces_list buffer
                 for i in range(4):
@@ -374,6 +442,12 @@ def main():
                 # intended GRF rather than losing torque to leg link gravity
                 tau_stance = wbc.compute_torques(
                     forces_list, gravity_comp=True)
+                debug_log(
+                    "wbc_output",
+                    step_count,
+                    tau_stance=tau_stance.copy(),
+                )
+
 
                 # Build stance mask (reuse pre-allocated buffer)
                 stance_mask_actuator.fill(0)
@@ -457,6 +531,12 @@ def main():
             ramp_up = min(1.0, ramp_up + 0.0005)
 
             np.clip(tau_final, -35.0, 35.0, out=tau_final)
+            debug_log(
+                "tau_final",
+                step_count,
+                tau=tau_final.copy(),
+            )
+
             data.ctrl[:] = tau_final
 
             # ---------------------------------------------
