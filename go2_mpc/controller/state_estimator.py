@@ -1,5 +1,4 @@
 import numpy as np
-from dataclasses import dataclass
 from go2_mpc.core.state import BaseState, JointState, State
 
 
@@ -7,17 +6,15 @@ class StateEstimator:
     def __init__(self, robot):
         self.robot = robot
 
-        self._rot_mat = np.zeros((3, 3))
         self._foot_pos_rel = np.zeros((4, 3))
 
     def estimate(self):
         """
         Returns:
             structured State
-            foot_pos_rel (4,3) in world frame
+            foot_pos_rel (4,3) in world frame relative to base
         """
-
-        self.robot.forward_kinematics()
+        # mj_step already computes full forward kinematics, no need to call again
 
         pos, quat = self.robot.get_base_pose()
         v_world, w_body = self.robot.get_base_velocity()
@@ -27,7 +24,6 @@ class StateEstimator:
         if norm > 0:
             quat = quat / norm
 
-        # Build structured State
         base = BaseState(
             position=pos,
             orientation=quat,
@@ -35,23 +31,15 @@ class StateEstimator:
             angular_velocity=w_body,
         )
 
-        # Rotation matrix
-        R = base.rotation_matrix
-
-        # Convert linear velocity to body frame
-        v_body = R.T @ v_world
-
-        # Joints come directly from robot if needed
         joints = JointState(
-            positions=self.robot.data.qpos[7:19],
-            velocities=self.robot.data.qvel[6:18],
+            positions=self.robot.get_joint_state()[0],
+            velocities=self.robot.get_joint_state()[1],
         )
 
         state = State(base=base, joints=joints)
 
-        # Foot positions relative to COM
+        # Foot positions relative to base
         foot_world = self.robot.get_foot_positions_world()
-
         for i in range(4):
             self._foot_pos_rel[i] = foot_world[i] - pos
 

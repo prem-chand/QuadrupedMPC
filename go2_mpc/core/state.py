@@ -2,25 +2,6 @@ from dataclasses import dataclass
 import numpy as np
 
 
-# def _quat_to_euler(quat):
-#     """Converts [w,x,y,z] to [roll, pitch, yaw] (reuses internal buffer)"""
-#     w, x, y, z = quat
-#     # Standard conversion
-#     t0 = +2.0 * (w * x + y * z)
-#     t1 = +1.0 - 2.0 * (x * x + y * y)
-#     rpy = np.zeros(3)
-#     rpy[0] = np.arctan2(t0, t1)
-
-#     t2 = +2.0 * (w * y - z * x)
-#     t2 = np.clip(t2, -1.0, 1.0)
-#     rpy[1] = np.arcsin(t2)
-
-#     t3 = +2.0 * (w * z + x * y)
-#     t4 = +1.0 - 2.0 * (y * y + z * z)
-#     rpy[2] = np.arctan2(t3, t4)
-#     return rpy
-
-
 @dataclass
 class BaseState:
     position: np.ndarray
@@ -28,49 +9,62 @@ class BaseState:
     linear_velocity: np.ndarray
     angular_velocity: np.ndarray
 
-    # @property
-    # def euler(self):
-    #     return _quat_to_euler(self.orientation)
-
-    @property
-    def rotation_matrix(self):
+    def __post_init__(self):
+        # Eagerly compute and cache derived quantities (accessed multiple times per step)
         w, x, y, z = self.orientation
-        R = np.zeros((3, 3))
 
+        # Euler angles
+        t0 = 2.0 * (w * x + y * z)
+        t1 = 1.0 - 2.0 * (x * x + y * y)
+        self._roll = float(np.arctan2(t0, t1))
+
+        t2 = np.clip(2.0 * (w * y - z * x), -1.0, 1.0)
+        self._pitch = float(np.arcsin(t2))
+
+        self._yaw = float(np.arctan2(
+            2.0 * (w * z + x * y),
+            1.0 - 2.0 * (y * y + z * z),
+        ))
+
+        # Rotation matrix
+        R = np.empty((3, 3))
         R[0, 0] = 1 - 2*(y*y + z*z)
         R[0, 1] = 2*(x*y - z*w)
         R[0, 2] = 2*(x*z + y*w)
-
         R[1, 0] = 2*(x*y + z*w)
         R[1, 1] = 1 - 2*(x*x + z*z)
         R[1, 2] = 2*(y*z - x*w)
-
         R[2, 0] = 2*(x*z - y*w)
         R[2, 1] = 2*(y*z + x*w)
         R[2, 2] = 1 - 2*(x*x + y*y)
-        return R
+        self._rotation_matrix = R
+
+    @property
+    def rotation_matrix(self):
+        return self._rotation_matrix
 
     @property
     def roll(self):
-        w, x, y, z = self.orientation
-        t0 = +2.0 * (w * x + y * z)
-        t1 = +1.0 - 2.0 * (x * x + y * y)
-        return np.arctan2(t0, t1)
+        return self._roll
 
     @property
     def pitch(self):
-        w, x, y, z = self.orientation
-        t2 = +2.0 * (w * y - z * x)
-        t2 = np.clip(t2, -1.0, 1.0)
-        return np.arcsin(t2)
+        return self._pitch
 
     @property
     def yaw(self):
-        w, x, y, z = self.orientation
-        return np.arctan2(
-            2.0 * (w * z + x * y),
-            1.0 - 2.0 * (y * y + z * z)
-        )
+        return self._yaw
+
+    def to_mpc_vector(self):
+        """Convert to 12-dim MPC state: [pos, rpy, lin_vel, ang_vel]."""
+        x = np.empty(12)
+        x[0:3] = self.position
+        x[3] = self._roll
+        x[4] = self._pitch
+        x[5] = self._yaw
+        x[6:9] = self.linear_velocity
+        x[9:12] = self.angular_velocity
+        return x
 
 
 @dataclass

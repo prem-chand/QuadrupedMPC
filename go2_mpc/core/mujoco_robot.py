@@ -15,6 +15,14 @@ class MujocoRobot(Robot):
             for name in self.foot_names
         ]
 
+        # Leg DOF indices in qvel (after 6 floating base DOFs)
+        self.leg_dof_indices = [
+            [6, 7, 8],      # FL
+            [9, 10, 11],     # FR
+            [12, 13, 14],    # RL
+            [15, 16, 17],    # RR
+        ]
+
         # Preallocate jacobian buffers
         self._J = np.zeros((3, model.nv))
         self._Jr = np.zeros((3, model.nv))
@@ -25,10 +33,6 @@ class MujocoRobot(Robot):
 
     def step(self):
         mujoco.mj_step(self.model, self.data)
-
-    def forward_kinematics(self):
-        mujoco.mj_kinematics(self.model, self.data)
-        mujoco.mj_comPos(self.model, self.data)
 
     def get_time(self):
         return self.data.time
@@ -48,10 +52,12 @@ class MujocoRobot(Robot):
         qvel = self.data.qvel
         return qvel[0:3], qvel[3:6]
 
+    # ==========================
+    # Joints
+    # ==========================
+
     def get_joint_state(self):
-        qpos = self.data.qpos
-        qvel = self.data.qvel
-        return qpos[7:], qvel[6:]
+        return self.data.qpos[7:], self.data.qvel[6:]
 
     # ==========================
     # Feet
@@ -63,7 +69,8 @@ class MujocoRobot(Robot):
             for i in range(4)
         ]
 
-    def get_foot_jacobian_full(self, foot_index):
+    def get_foot_jacobian(self, foot_index):
+        """Full (3, nv) positional Jacobian for the given foot."""
         mujoco.mj_jacSite(
             self.model,
             self.data,
@@ -71,4 +78,40 @@ class MujocoRobot(Robot):
             self._Jr,
             self.foot_ids[foot_index],
         )
-        return self._J
+        return self._J.copy()
+
+    def get_leg_jacobian(self, foot_index):
+        """(3, 3) Jacobian block for leg joints only."""
+        mujoco.mj_jacSite(
+            self.model,
+            self.data,
+            self._J,
+            self._Jr,
+            self.foot_ids[foot_index],
+        )
+        dofs = self.leg_dof_indices[foot_index]
+        return self._J[:, dofs].copy()
+
+    def get_foot_velocity(self, foot_index):
+        """Cartesian velocity (3,) of the foot in world frame."""
+        mujoco.mj_jacSite(
+            self.model,
+            self.data,
+            self._J,
+            self._Jr,
+            self.foot_ids[foot_index],
+        )
+        return self._J @ self.data.qvel
+
+    def get_gravity_compensation(self, leg_index):
+        """Gravity/Coriolis torques (3,) for the 3 DOFs of the given leg."""
+        dofs = self.leg_dof_indices[leg_index]
+        return self.data.qfrc_bias[dofs].copy()
+
+    # ==========================
+    # Legacy (kept for backward compat during transition)
+    # ==========================
+
+    def get_foot_jacobian_full(self, foot_index):
+        """Deprecated: use get_foot_jacobian() or get_leg_jacobian() instead."""
+        return self.get_foot_jacobian(foot_index)

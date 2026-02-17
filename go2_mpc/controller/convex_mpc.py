@@ -28,20 +28,6 @@ class ConvexMPC:
         self.I_inv = np.linalg.inv(self.inertia)
 
     # ==========================================================
-    # Structured State → Vector
-    # ==========================================================
-
-    def _structured_to_vector(self, state):
-        x = np.zeros(12)
-        x[0:3] = state.base.position
-        x[3] = state.base.roll
-        x[4] = state.base.pitch
-        x[5] = state.base.yaw
-        x[6:9] = state.base.linear_velocity
-        x[9:12] = state.base.angular_velocity
-        return x
-
-    # ==========================================================
     # Dynamics Linearization
     # ==========================================================
 
@@ -99,10 +85,13 @@ class ConvexMPC:
         H = np.zeros((n_vars, n_vars))
         f = np.zeros(n_vars)
 
-        # Cost terms
+        # Cost terms: (x - x_ref)^T Q (x - x_ref) + u^T R u
+        # Expands to: x^T Q x - 2 x_ref^T Q x + const
+        # In QP form: H has Q on diagonal, f gets -Q @ x_ref
         for k in range(N):
             idx_x = nx*(k+1)
             H[idx_x:idx_x+nx, idx_x:idx_x+nx] += self.Q
+            f[idx_x:idx_x+nx] = -self.Q @ x_ref[:, k+1]
 
             idx_u = nx*(N+1) + nu*k
             H[idx_u:idx_u+nu, idx_u:idx_u+nu] += self.R / (self.force_scale**2)
@@ -139,6 +128,7 @@ class ConvexMPC:
         A_ineq = []
         b_ineq = []
 
+        mu = self.mu
         for k in range(N):
             for leg in range(4):
                 idx_u = nx*(N+1) + nu*k + 3*leg
@@ -149,11 +139,40 @@ class ConvexMPC:
                 A_ineq.append(row)
                 b_ineq.append(0)
 
-                # Fz <= contact
+                # Fz <= contact * f_max (scaled by force_scale)
                 row = np.zeros(n_vars)
                 row[idx_u+2] = 1
                 A_ineq.append(row)
                 b_ineq.append(contact_schedule[k, leg])
+
+                # Friction pyramid: |Fx| <= mu*Fz, |Fy| <= mu*Fz
+                # Fx - mu*Fz <= 0
+                row = np.zeros(n_vars)
+                row[idx_u+0] = 1
+                row[idx_u+2] = -mu
+                A_ineq.append(row)
+                b_ineq.append(0)
+
+                # -Fx - mu*Fz <= 0
+                row = np.zeros(n_vars)
+                row[idx_u+0] = -1
+                row[idx_u+2] = -mu
+                A_ineq.append(row)
+                b_ineq.append(0)
+
+                # Fy - mu*Fz <= 0
+                row = np.zeros(n_vars)
+                row[idx_u+1] = 1
+                row[idx_u+2] = -mu
+                A_ineq.append(row)
+                b_ineq.append(0)
+
+                # -Fy - mu*Fz <= 0
+                row = np.zeros(n_vars)
+                row[idx_u+1] = -1
+                row[idx_u+2] = -mu
+                A_ineq.append(row)
+                b_ineq.append(0)
 
         A_ineq = np.vstack(A_ineq)
         b_ineq = np.array(b_ineq)
@@ -166,7 +185,7 @@ class ConvexMPC:
 
     def solve(self, state, x_ref, contact_schedule, foot_positions_body):
 
-        x0 = self._structured_to_vector(state)
+        x0 = state.base.to_mpc_vector()
         yaw = state.base.yaw
 
         A, B, g = self.update_dynamics_matrices(

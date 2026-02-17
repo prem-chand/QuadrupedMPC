@@ -31,28 +31,18 @@ class ControllerCore:
         self.control_decimation = 10  # 1 kHz -> 100 Hz (WBC loop)
         self.mpc_decimation = 3       # 100 Hz -> 33 Hz (MPC loop)
         
-        # [FIX 1] Restore heavy smoothing from original code (0.9 -> 0.99)
-        self.force_alpha = config.get("FORCE_SMOOTH_ALPHA", 0.99)
+        self.force_alpha = config.get("FORCE_SMOOTH_ALPHA", 0.9)
+        self.torque_limit = config.get("TORQUE_LIMIT", 35.0)
 
-        # Swing Configuration (Matches original main.py)
+        # Swing Configuration
         self.swing_trajs = [FootSwingTrajectory() for _ in range(4)]
-        self.kp_swing = 400.0  
-        self.kd_swing = 10.0
-
-    def _structured_to_vector(self, state):
-        x = np.zeros(12)
-        x[0:3] = state.base.position
-        x[3] = state.base.roll
-        x[4] = state.base.pitch
-        x[5] = state.base.yaw
-        x[6:9] = state.base.linear_velocity
-        x[9:12] = state.base.angular_velocity
-        return x
+        self.kp_swing = config.get("SWING_KP", 400.0)
+        self.kd_swing = config.get("SWING_KD", 10.0)
 
     def compute(self, state, foot_pos_rel, command, controller_state, buffers, robot_interface):
         """
         Args:
-            robot_interface: Instance of MujocoRobot (existing class)
+            robot_interface: Instance implementing the Robot interface.
         """
         
         # 1. Update Global Time
@@ -85,7 +75,7 @@ class ControllerCore:
             # --- C. MPC (33 Hz) ---
             # Runs every 3rd execution of the 100Hz loop
             if controller_state.mpc_counter % self.mpc_decimation == 0:
-                state_vec = self._structured_to_vector(state)
+                state_vec = state.base.to_mpc_vector()
                 
                 ref = self.traj_gen.generate_reference(
                     state_vec,
@@ -111,8 +101,9 @@ class ControllerCore:
             controller_state.mpc_counter += 1
 
             # --- D. Force Smoothing & WBC ---
-            buffers.smoothed_forces *= (1 - self.force_alpha)
-            buffers.smoothed_forces += self.force_alpha * buffers.current_forces
+            # EMA: alpha close to 1 = heavy smoothing (keep old value)
+            buffers.smoothed_forces *= self.force_alpha
+            buffers.smoothed_forces += (1 - self.force_alpha) * buffers.current_forces
             
             forces_list = [buffers.smoothed_forces[3*i : 3*i+3] for i in range(4)]
             buffers.tau_stance[:] = self.wbc.compute_torques(forces_list, gravity_comp=True)
@@ -158,21 +149,17 @@ class ControllerCore:
                 p_des = self.swing_trajs[i].get_position()
                 v_des = self.swing_trajs[i].get_velocity()
                 
-                # 2. Cartesian PD
-                # Use MujocoRobot methods to get current state
-                J = robot_interface.get_foot_jacobian_full(i) 
+                # 2. Cartesian PD (simulator-agnostic)
                 p_curr = robot_interface.get_foot_positions_world()[i]
-                
-                # v = J @ qvel. We use the full qvel from data
-                v_curr = J @ robot_interface.data.qvel 
-                
+                v_curr = robot_interface.get_foot_velocity(i)
+
                 F_swing = self.kp_swing * (p_des - p_curr) + self.kd_swing * (v_des - v_curr)
-                
-                # 3. Torque Mapping: tau = J^T @ F + gravity
-                leg_dofs = slice(6 + i*3, 9 + i*3)
-                qfrc_leg = robot_interface.data.qfrc_bias[leg_dofs]
-                
-                tau_leg = J[:, leg_dofs].T @ F_swing + qfrc_leg
+
+                # 3. Torque Mapping: tau = J_leg^T @ F + gravity comp
+                J_leg = robot_interface.get_leg_jacobian(i)
+                grav_comp = robot_interface.get_gravity_compensation(i)
+
+                tau_leg = J_leg.T @ F_swing + grav_comp
                 buffers.tau_swing[3*i : 3*i+3] = tau_leg
 
         # ======================================================
@@ -185,7 +172,6 @@ class ControllerCore:
             else:
                 buffers.tau_final[idx] = buffers.tau_stance[idx]
 
-        # [FIX 4] Safety Clip
-        np.clip(buffers.tau_final, -35.0, 35.0, out=buffers.tau_final)
+        np.clip(buffers.tau_final, -self.torque_limit, self.torque_limit, out=buffers.tau_final)
 
         return buffers.tau_final
