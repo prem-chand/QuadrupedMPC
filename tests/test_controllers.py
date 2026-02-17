@@ -226,7 +226,7 @@ class TestJointPDController:
 
     def test_init(self):
         """Test JointPDController initialization."""
-        from go2_mpc.controller.joint_pd_controller import JointPDController
+        from archive.debug.joint_pd_controller import JointPDController
 
         pd = JointPDController(kp=60.0, kd=5.0)
 
@@ -236,7 +236,7 @@ class TestJointPDController:
 
     def test_zero_error_zero_torque(self):
         """Test that zero position error gives zero torque (ignoring velocity)."""
-        from go2_mpc.controller.joint_pd_controller import JointPDController
+        from archive.debug.joint_pd_controller import JointPDController
 
         pd = JointPDController(kp=60.0, kd=0.0)  # No damping
 
@@ -252,7 +252,7 @@ class TestJointPDController:
 
     def test_actuator_mapping(self):
         """Test joint to actuator mapping is correct."""
-        from go2_mpc.controller.joint_pd_controller import JointPDController
+        from archive.debug.joint_pd_controller import JointPDController
 
         pd = JointPDController()
 
@@ -389,7 +389,7 @@ class TestMuJoCoIntegration:
     def test_joint_pd_standing(self, mujoco_setup):
         """Test that joint PD controller maintains standing."""
         import mujoco
-        from go2_mpc.controller.joint_pd_controller import JointPDController
+        from archive.debug.joint_pd_controller import JointPDController
 
         model, data = mujoco_setup
         pd = JointPDController(kp=60.0, kd=5.0)

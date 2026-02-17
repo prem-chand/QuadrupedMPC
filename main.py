@@ -99,10 +99,11 @@ def main():
     )
 
     controller_state = ControllerState(
+        step_counter=0,
         mpc_counter=0,
         gait_phase_time=0.0,
         swing_active=np.zeros(4),
-        swing_start_pos=[np.zeros(3) for _ in range(4)],
+        swing_start_pos=[p.copy() for p in robot.get_foot_positions_world()], # <--- Valid Init
     )
 
     buffers = ControllerBuffers()
@@ -141,10 +142,11 @@ def main():
                 command=command,
                 controller_state=controller_state,
                 buffers=buffers,
+                robot_interface=robot  # <--- Pass existing instance
             )
 
-            # ---- Apply Torques ----
             robot.set_torques(tau)
+            robot.step()
 
             # ---- Sync Viewer ----
             viewer.sync()
