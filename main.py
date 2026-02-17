@@ -93,6 +93,16 @@ def main():
     buffers = ControllerBuffers()
 
     # ==========================================================
+    # Standing Phase Config
+    # ==========================================================
+
+    stand_duration = 1.0  # seconds
+    # Joint angles from go2.xml default pose: [hip, thigh, calf] x 4 legs
+    q_stand = np.array([0.0, 0.9, -1.8] * 4)
+    stand_kp = 300.0
+    stand_kd = 10.0
+
+    # ==========================================================
     # Main Loop
     # ==========================================================
 
@@ -104,22 +114,38 @@ def main():
 
             robot.step()
 
-            state, foot_pos_rel = estimator.estimate()
+            sim_time = robot.get_time()
 
-            command = Command(
-                v_cmd_global=np.zeros(3),
-                yaw_rate=0.0,
-                default_height=cfg.controller.default_height,
-            )
+            if sim_time < stand_duration:
+                # --- Standing phase: joint PD + gravity compensation ---
+                q, qd = robot.get_joint_state()
+                tau = np.zeros(12)
+                for i in range(4):
+                    idx = slice(3 * i, 3 * i + 3)
+                    grav = robot.get_gravity_compensation(i)
+                    tau[idx] = stand_kp * (q_stand[3*i:3*i+3] - q[3*i:3*i+3]) \
+                        - stand_kd * qd[3*i:3*i+3] + grav
+                np.clip(tau, -cfg.controller.torque_limit,
+                        cfg.controller.torque_limit, out=tau)
+                # print(f"Standing height: {robot.get_base_pose()[0][2]:.3f} m")
+            else:
+                # --- Trot phase: full MPC controller ---
+                state, foot_pos_rel = estimator.estimate()
 
-            tau = controller.compute(
-                state=state,
-                foot_pos_rel=foot_pos_rel,
-                command=command,
-                controller_state=controller_state,
-                buffers=buffers,
-                robot_interface=robot,
-            )
+                command = Command(
+                    v_cmd_global=np.zeros(3),
+                    yaw_rate=0.0,
+                    default_height=cfg.controller.default_height,
+                )
+
+                tau = controller.compute(
+                    state=state,
+                    foot_pos_rel=foot_pos_rel,
+                    command=command,
+                    controller_state=controller_state,
+                    buffers=buffers,
+                    robot_interface=robot,
+                )
 
             robot.set_torques(tau)
 

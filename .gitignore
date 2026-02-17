@@ -35,3 +35,4 @@ debug/
 .pytest_cache/
 .DS_Store
 CLAUDE.md
+*.log
