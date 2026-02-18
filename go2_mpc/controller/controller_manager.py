@@ -46,6 +46,11 @@ class ControllerCore:
             [ 0.1934, -0.142, 0.0],
             [-0.1934,  0.142, 0.0],
             [-0.1934, -0.142, 0.0],
+            # 0955
+            # [ 0.1934,  0.0955, 0.0],
+            # [ 0.1934, -0.0955, 0.0],
+            # [-0.1934,  0.0955, 0.0],
+            # [-0.1934, -0.0955, 0.0],
         ]))
 
     def compute(self, state, foot_pos_rel, command, controller_state, buffers, robot_interface):
@@ -90,7 +95,7 @@ class ControllerCore:
                         actual = foot_pos_world[i]
                         target = controller_state.swing_target_pos[i]
                         err = actual - target
-                        print(f"[TD] {leg_names[i]}  target_y={target[1]:.4f}  actual_y={actual[1]:.4f}  err_y={err[1]:.4f}  err_xy={np.linalg.norm(err[:2]):.4f}")
+                        # print(f"[TD] {leg_names[i]}  target_y={target[1]:.4f}  actual_y={actual[1]:.4f}  err_y={err[1]:.4f}  err_xy={np.linalg.norm(err[:2]):.4f}")
                     controller_state.swing_active[i] = 0
                     # Continuously update start pos so it's fresh upon lift-off
                     controller_state.swing_start_pos[i][:] = foot_pos_world[i]
@@ -119,7 +124,7 @@ class ControllerCore:
                         controller_state.swing_target_pos[i][:] = pf
 
                         # Log swing onset info
-                        print(f"[LO] {leg_names[i]}  stance_y={p_stance_world[1]:.4f}  p0_y={p0[1]:.4f}  pf_y={pf[1]:.4f}  off_y={off_world[1]:.4f}  base_y={state.base.position[1]:.4f}")
+                        # print(f"[LO] {leg_names[i]}  stance_y={p_stance_world[1]:.4f}  p0_y={p0[1]:.4f}  pf_y={pf[1]:.4f}  off_y={off_world[1]:.4f}  base_y={state.base.position[1]:.4f}")
 
                     controller_state.swing_active[i] = 1
 
@@ -143,7 +148,18 @@ class ControllerCore:
 
                 forces = self.mpc.solve(state, ref, buffers.contact_schedule, foot_pos_body)
                 np.copyto(buffers.current_forces, forces)
-                
+
+                # Diagnostic: log MPC state and forces at 33 Hz
+                roll  = state.base.roll
+                vy    = state.base.linear_velocity[1]
+                base_y = state.base.position[1]
+                # Lateral (Y) forces per leg [FL, FR, RL, RR]
+                fy = [forces[3*j+1] for j in range(4)]
+                fz = [forces[3*j+2] for j in range(4)]
+                # print(f"[MPC] roll={np.degrees(roll):+.2f}deg  vy={vy:+.3f}m/s  base_y={base_y:+.4f}m  "
+                #       f"Fy=[{fy[0]:+.1f},{fy[1]:+.1f},{fy[2]:+.1f},{fy[3]:+.1f}]N  "
+                #       f"Fz=[{fz[0]:+.1f},{fz[1]:+.1f},{fz[2]:+.1f},{fz[3]:+.1f}]N")
+
             controller_state.mpc_counter += 1
 
             # --- D. Force Smoothing & WBC ---

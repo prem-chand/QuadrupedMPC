@@ -131,7 +131,9 @@ def main():
                         - stand_kd * qd[3*i:3*i+3] + grav
                 np.clip(tau, -cfg.controller.torque_limit,
                         cfg.controller.torque_limit, out=tau)
-                # print(f"Standing height: {robot.get_base_pose()[0][2]:.3f} m")
+                # print(f"Standing pos: {robot.get_base_pose()[0]:.3f} m")
+                # print("foot positions (world frame): ", robot.get_foot_positions_world())
+                
             else:
                 # --- Trot phase: full MPC controller ---
                 state, foot_pos_rel = estimator.estimate()
