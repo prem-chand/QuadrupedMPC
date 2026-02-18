@@ -77,6 +77,7 @@ def main():
             "TORQUE_LIMIT": cfg.controller.torque_limit,
             "SWING_KP": cfg.controller.swing_kp,
             "SWING_KD": cfg.controller.swing_kd,
+            "FOOT_STANCE_OFFSETS": cfg.controller.foot_stance_offsets,
         },
     )
 
@@ -86,6 +87,9 @@ def main():
         gait_phase_time=0.0,
         swing_active=np.zeros(4),
         swing_start_pos=[
+            p.copy() for p in robot.get_foot_positions_world()
+        ],
+        swing_target_pos=[
             p.copy() for p in robot.get_foot_positions_world()
         ],
     )

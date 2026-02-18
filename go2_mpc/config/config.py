@@ -51,6 +51,10 @@ class ControllerConfig:
     torque_limit: float
     swing_kp: float
     swing_kd: float
+    # (4, 3) Nominal foot stance XY positions relative to base CoM in body frame [FL, FR, RL, RR].
+    # Used as the anchor point for the Raibert foot placement heuristic.
+    # Computed from go2.xml: hip_pos + thigh_offset (Z ignored, set from liftoff height).
+    foot_stance_offsets: np.ndarray
 
 
 # ==========================================================
@@ -80,7 +84,7 @@ def default_config() -> SystemConfig:
             inertia=np.diag([0.18, 0.35, 0.3]),
             horizon=10,
             dt=0.03,
-            Q=np.diag([1, 5, 100, 3, 10, 0.1, 5, 5, 12, 2, 3, 2]),
+            Q=np.diag([1, 5, 100, 30, 10, 5, 5, 5, 12, 10, 3, 2]),
             R=np.diag([1e-6] * 12),
             mu=0.6,
             f_max=180.0,
@@ -91,10 +95,16 @@ def default_config() -> SystemConfig:
         ),
         controller=ControllerConfig(
             mpc_decimation=3,
-            force_smooth_alpha=0.9,
+            force_smooth_alpha=0.05,
             default_height=0.32,
             torque_limit=35.0,
             swing_kp=400.0,
             swing_kd=10.0,
+            foot_stance_offsets=np.array([
+                [ 0.1934,  0.142, 0.0],  # FL: hip_y(0.0465) + thigh_y(0.0955)
+                [ 0.1934, -0.142, 0.0],  # FR: hip_y(-0.0465) + thigh_y(-0.0955)
+                [-0.1934,  0.142, 0.0],  # RL: hip_y(0.0465) + thigh_y(0.0955)
+                [-0.1934, -0.142, 0.0],  # RR: hip_y(-0.0465) + thigh_y(-0.0955)
+            ]),
         ),
     )

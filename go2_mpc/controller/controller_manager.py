@@ -9,6 +9,7 @@ class ControllerState:
     gait_phase_time: float     # Tracks continuous gait time
     swing_active: np.ndarray   # [4,] bool mask
     swing_start_pos: list      # List of 4 np.arrays (World Frame)
+    swing_target_pos: list     # List of 4 np.arrays — frozen landing targets (World Frame)
 
 class ControllerBuffers:
     def __init__(self):
@@ -39,6 +40,14 @@ class ControllerCore:
         self.kp_swing = config.get("SWING_KP", 400.0)
         self.kd_swing = config.get("SWING_KD", 10.0)
 
+        # Nominal foot stance positions (body frame) for Raibert foot placement
+        self.foot_stance_offsets = config.get("FOOT_STANCE_OFFSETS", np.array([
+            [ 0.1934,  0.142, 0.0],
+            [ 0.1934, -0.142, 0.0],
+            [-0.1934,  0.142, 0.0],
+            [-0.1934, -0.142, 0.0],
+        ]))
+
     def compute(self, state, foot_pos_rel, command, controller_state, buffers, robot_interface):
         """
         Args:
@@ -64,12 +73,54 @@ class ControllerCore:
             # We need absolute world positions to know where to start swinging from
             foot_pos_world = robot_interface.get_foot_positions_world()
             
+            # Rotate velocities into yaw-aligned body frame for Raibert heuristic
+            cos_y = np.cos(state.base.yaw)
+            sin_y = np.sin(state.base.yaw)
+            R_z_T_100 = np.array([[cos_y, sin_y, 0], [-sin_y, cos_y, 0], [0, 0, 1]])
+            R_z_100 = R_z_T_100.T
+
+            v_body = R_z_T_100 @ state.base.linear_velocity
+            v_cmd_body = R_z_T_100 @ command.v_cmd_global
+
+            leg_names = ["FL", "FR", "RL", "RR"]
             for i in range(4):
-                if current_contact[i] == 1: # Stance
+                if current_contact[i] == 1:  # Stance
+                    if controller_state.swing_active[i]:
+                        # --- Touchdown: log landing error ---
+                        actual = foot_pos_world[i]
+                        target = controller_state.swing_target_pos[i]
+                        err = actual - target
+                        print(f"[TD] {leg_names[i]}  target_y={target[1]:.4f}  actual_y={actual[1]:.4f}  err_y={err[1]:.4f}  err_xy={np.linalg.norm(err[:2]):.4f}")
                     controller_state.swing_active[i] = 0
                     # Continuously update start pos so it's fresh upon lift-off
                     controller_state.swing_start_pos[i][:] = foot_pos_world[i]
                 else:
+                    if not controller_state.swing_active[i]:
+                        # --- Swing onset: compute and freeze landing target ---
+                        p0 = controller_state.swing_start_pos[i]
+
+                        # Raibert Heuristic (yaw-aligned body frame)
+                        # p_target = p_hip + v * T/2 + K * (v_cmd - v)
+                        raibert_offset = v_body[0:2] * self.gait.period * 0.5
+                        raibert_offset += 0.1 * (v_cmd_body[0:2] - v_body[0:2])
+
+                        # Rotate offset back to world
+                        off_world = R_z_100 @ np.array([raibert_offset[0], raibert_offset[1], 0.0])
+
+                        # Nominal stance position in world frame
+                        p_stance_world = state.base.position + R_z_100 @ self.foot_stance_offsets[i]
+
+                        # Landing target = stance position + Raibert offset
+                        pf = p_stance_world.copy()
+                        pf[0] += off_world[0]
+                        pf[1] += off_world[1]
+                        pf[2] = p0[2]  # Keep Z from liftoff height (terrain-agnostic)
+
+                        controller_state.swing_target_pos[i][:] = pf
+
+                        # Log swing onset info
+                        print(f"[LO] {leg_names[i]}  stance_y={p_stance_world[1]:.4f}  p0_y={p0[1]:.4f}  pf_y={pf[1]:.4f}  off_y={off_world[1]:.4f}  base_y={state.base.position[1]:.4f}")
+
                     controller_state.swing_active[i] = 1
 
             # --- C. MPC (33 Hz) ---
@@ -84,15 +135,10 @@ class ControllerCore:
                     command.default_height,
                 )
 
-                # [FIX 2] Coordinate Frame Rotation
                 # MPC requires feet in BODY frame, but foot_pos_rel is WORLD frame.
-                cos_y = np.cos(state.base.yaw)
-                sin_y = np.sin(state.base.yaw)
-                R_z_T = np.array([[cos_y, sin_y, 0], [-sin_y, cos_y, 0], [0, 0, 1]])
-                
                 foot_pos_body = []
                 for i in range(4):
-                    p_b = R_z_T @ foot_pos_rel[i]
+                    p_b = R_z_T_100 @ foot_pos_rel[i]
                     foot_pos_body.append(p_b)
 
                 forces = self.mpc.solve(state, ref, buffers.contact_schedule, foot_pos_body)
@@ -112,43 +158,24 @@ class ControllerCore:
         # HIGH FREQUENCY LOOP (1 kHz) - Swing Control
         # ======================================================
         buffers.tau_swing.fill(0.0)
-        
-        # [FIX 3] Re-implement Cartesian PD + Jacobian Transpose (Ghost Legs Fix)
-        
-        # Calculate Body Velocity for Raibert Heuristic
-        cos_y = np.cos(state.base.yaw)
-        sin_y = np.sin(state.base.yaw)
-        R_z_T = np.array([[cos_y, sin_y, 0], [-sin_y, cos_y, 0], [0, 0, 1]])
-        v_body = R_z_T @ state.base.linear_velocity
 
         for i in range(4):
             if controller_state.swing_active[i]:
-                # 1. Trajectory Generation
+                # 1. Trajectory Generation (using frozen landing target)
                 t_swing = self.gait.get_swing_state(controller_state.gait_phase_time, i)
                 swing_duration = self.gait.period * (1.0 - self.gait.stance_ratio)
-                
-                # Raibert Heuristic
-                raibert_offset = v_body[0:2] * self.gait.period * 0.5
-                raibert_offset += 0.5 * (command.v_cmd_global[0:2] - v_body[0:2])
-                
-                # Rotate offset back to world
-                R_z = R_z_T.T
-                off_world = R_z @ np.array([raibert_offset[0], raibert_offset[1], 0.0])
-                
+
                 p0 = controller_state.swing_start_pos[i]
-                pf = p0.copy()
-                pf[0] += off_world[0]
-                pf[1] += off_world[1]
-                pf[2] = 0.02 # Z-target
+                pf = controller_state.swing_target_pos[i]
 
                 self.swing_trajs[i].set_initial_position(p0)
                 self.swing_trajs[i].set_final_position(pf)
                 self.swing_trajs[i].set_height(0.10)
                 self.swing_trajs[i].compute_swing_trajectory_bezier(t_swing, swing_duration)
-                
+
                 p_des = self.swing_trajs[i].get_position()
                 v_des = self.swing_trajs[i].get_velocity()
-                
+
                 # 2. Cartesian PD (simulator-agnostic)
                 p_curr = robot_interface.get_foot_positions_world()[i]
                 v_curr = robot_interface.get_foot_velocity(i)
