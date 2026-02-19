@@ -6,6 +6,17 @@ all quantities through the simulator-agnostic :class:`Robot` ABC.
 Controller code never imports this module directly — it only sees the
 abstract interface.
 
+MuJoCo is used exclusively for:
+  - ``mj_step``  — dynamics integration
+  - ``data.qpos`` / ``data.qvel``  — state readout (sensor data)
+  - ``data.ctrl``  — torque command write-back
+
+All kinematics (foot positions, Jacobians, foot velocities) and the
+gravity compensation term are computed analytically by
+:class:`~go2_mpc.kinematics.Go2Kinematics`, with zero dependency on
+MuJoCo's forward-kinematics outputs (``site_xpos``, ``mj_jacSite``,
+``qfrc_bias``).
+
 MuJoCo frame conventions used here
 -----------------------------------
 - **qpos[0:3]**  — base position in world frame (m).
@@ -16,8 +27,6 @@ MuJoCo frame conventions used here
   This is the MuJoCo convention for free joints.
 - **qpos[7:]**   — joint positions (rad), ordered by XML definition.
 - **qvel[6:]**   — joint velocities (rad/s), same ordering.
-- **qfrc_bias**  — Coriolis + gravitational forces in generalised
-  coordinates (N·m for joints, N for base translational DOFs).
 
 Leg ordering: ``[FL, FR, RL, RR]``, each with 3 DOFs
 ``[hip_abduction, hip_flexion, knee_flexion]``.
@@ -26,6 +35,7 @@ Leg ordering: ``[FL, FR, RL, RR]``, each with 3 DOFs
 from .robot import Robot
 import numpy as np
 import mujoco
+from go2_mpc.kinematics import Go2Kinematics
 
 
 class MujocoRobot(Robot):
@@ -43,27 +53,8 @@ class MujocoRobot(Robot):
         self.model = model
         self.data = data
 
-        # Foot contact sites defined in the XML
-        self.foot_names = ["FL_toe", "FR_toe", "RL_toe", "RR_toe"]
-        self.foot_ids = [
-            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name)
-            for name in self.foot_names
-        ]
-
-        # Indices into qvel for each leg's 3 actuated joints.
-        # The first 6 qvel entries belong to the floating base.
-        self.leg_dof_indices = [
-            [6, 7, 8],      # FL: hip_abd, hip_flex, knee
-            [9, 10, 11],    # FR
-            [12, 13, 14],   # RL
-            [15, 16, 17],   # RR
-        ]
-
-        # Pre-allocated Jacobian buffers to avoid per-call allocation.
-        # _J: positional (translational) Jacobian, shape (3, nv)
-        # _Jr: rotational Jacobian, shape (3, nv)  (unused but required by API)
-        self._J = np.zeros((3, model.nv))
-        self._Jr = np.zeros((3, model.nv))
+        # Analytical kinematics — no MuJoCo kinematics API needed.
+        self._kin = Go2Kinematics()
 
     # ==========================
     # Simulation
@@ -135,28 +126,56 @@ class MujocoRobot(Robot):
         return self.data.qpos[7:].copy(), self.data.qvel[6:].copy()
 
     # ==========================
-    # Feet
+    # Private helpers
+    # ==========================
+
+    def _get_base_state(self):
+        """Extract (p_base, R_base, v_base, omega_body) from qpos/qvel.
+
+        Computes the rotation matrix inline from the quaternion to avoid
+        a redundant ``get_base_pose()`` call and associated copy overhead.
+        """
+        qpos = self.data.qpos
+        qvel = self.data.qvel
+
+        p_base = qpos[0:3]
+        w, x, y, z = qpos[3:7]
+        # Normalise for numerical safety
+        n = np.sqrt(w*w + x*x + y*y + z*z)
+        w, x, y, z = w/n, x/n, y/n, z/n
+        R_base = np.array([
+            [1 - 2*(y*y + z*z),     2*(x*y - z*w),     2*(x*z + y*w)],
+            [    2*(x*y + z*w), 1 - 2*(x*x + z*z),     2*(y*z - x*w)],
+            [    2*(x*z - y*w),     2*(y*z + x*w), 1 - 2*(x*x + y*y)],
+        ], dtype=np.float64)
+        v_base     = qvel[0:3]
+        omega_body = qvel[3:6]
+        return p_base, R_base, v_base, omega_body
+
+    # ==========================
+    # Feet — analytical kinematics
     # ==========================
 
     def get_foot_positions_world(self):
-        """Foot positions from MuJoCo site sensors.
+        """Foot positions via analytical forward kinematics.
 
         Returns
         -------
         list of np.ndarray, each shape (3,)
             ``[FL, FR, RL, RR]`` foot positions in **world frame** (m).
-            Each array is a copy (safe to mutate).
         """
+        p_base, R_base, _, _ = self._get_base_state()
+        q_joints = self.data.qpos[7:]
         return [
-            self.data.site_xpos[self.foot_ids[i]].copy()
+            self._kin.foot_position_world(i, p_base, R_base, q_joints[3*i:3*i+3])
             for i in range(4)
         ]
 
     def get_foot_jacobian(self, foot_index):
-        """Full positional Jacobian for a foot site.
+        """Full positional Jacobian for a foot (analytically computed).
 
-        Computed via ``mj_jacSite``.  Maps generalised velocities to
-        the foot's Cartesian (translational) velocity in **world frame**:
+        Maps generalised velocities ``qvel`` (18-dim) to the foot's
+        Cartesian (translational) velocity in **world frame**:
         ``v_foot_W = J @ qvel``.
 
         Parameters
@@ -166,24 +185,20 @@ class MujocoRobot(Robot):
 
         Returns
         -------
-        np.ndarray, shape (3, nv)
-            Positional Jacobian in **world frame**.  Returned as a copy.
+        np.ndarray, shape (3, 18)
+            Full positional Jacobian in **world frame**.
         """
-        mujoco.mj_jacSite(
-            self.model,
-            self.data,
-            self._J,
-            self._Jr,
-            self.foot_ids[foot_index],
+        p_base, R_base, _, _ = self._get_base_state()
+        q_joints = self.data.qpos[7:]
+        return self._kin.full_jacobian(
+            foot_index, p_base, R_base, q_joints[3*foot_index:3*foot_index+3]
         )
-        return self._J.copy()
 
     def get_leg_jacobian(self, foot_index):
         """Leg-local Jacobian: 3 joint DOFs → foot Cartesian velocity.
 
-        Extracts the 3 columns of the full site Jacobian corresponding
-        to this leg's actuated joints.  Used by WBC and swing control
-        for the torque mapping ``tau_leg = J_leg^T @ F_foot``.
+        Used by WBC and swing control for the torque mapping
+        ``tau_leg = J_leg^T @ F_foot``.
 
         Parameters
         ----------
@@ -193,23 +208,20 @@ class MujocoRobot(Robot):
         Returns
         -------
         np.ndarray, shape (3, 3)
-            Jacobian block in **world frame**.  Returned as a copy.
+            Jacobian in **world frame**.
         """
-        mujoco.mj_jacSite(
-            self.model,
-            self.data,
-            self._J,
-            self._Jr,
-            self.foot_ids[foot_index],
+        p_base, R_base, _, _ = self._get_base_state()
+        q_joints = self.data.qpos[7:]
+        return self._kin.leg_jacobian(
+            foot_index, p_base, R_base, q_joints[3*foot_index:3*foot_index+3]
         )
-        dofs = self.leg_dof_indices[foot_index]
-        return self._J[:, dofs].copy()
 
     def get_foot_velocity(self, foot_index):
-        """Cartesian velocity of a foot in world frame.
+        """Cartesian velocity of a foot in world frame (analytically computed).
 
-        Computed as ``J_full @ qvel`` (includes base and joint
-        contributions).
+        Includes base translational, base rotational, and joint velocity
+        contributions:
+        ``v_foot = v_base + ω_W × (p_foot − p_base) + J_leg @ q̇_leg``
 
         Parameters
         ----------
@@ -221,20 +233,26 @@ class MujocoRobot(Robot):
         np.ndarray, shape (3,)
             Translational velocity in **world frame** (m/s).
         """
-        mujoco.mj_jacSite(
-            self.model,
-            self.data,
-            self._J,
-            self._Jr,
-            self.foot_ids[foot_index],
+        p_base, R_base, v_base, omega_body = self._get_base_state()
+        q_joints  = self.data.qpos[7:]
+        qd_joints = self.data.qvel[6:]
+        return self._kin.foot_velocity(
+            foot_index,
+            p_base, R_base,
+            q_joints[3*foot_index:3*foot_index+3],
+            v_base,
+            omega_body,
+            qd_joints[3*foot_index:3*foot_index+3],
         )
-        return self._J @ self.data.qvel
 
     def get_gravity_compensation(self, leg_index):
-        """Gravity + Coriolis bias torques for one leg.
+        """Static gravity compensation torques for one leg.
 
-        Extracted from MuJoCo's ``qfrc_bias`` which contains the
-        full C(q,qd)*qd + g(q) vector in generalised coordinates.
+        Computed analytically from the link CoM positions and masses
+        (see :meth:`~go2_mpc.kinematics.Go2Kinematics.gravity_compensation`).
+
+        Approximation: Coriolis/centrifugal terms excluded.  Residual
+        vs. MuJoCo ``qfrc_bias`` is ~0.1–0.5 Nm at trot speeds.
 
         Parameters
         ----------
@@ -245,10 +263,12 @@ class MujocoRobot(Robot):
         -------
         np.ndarray, shape (3,)
             Bias torques (N·m) for ``[hip_abd, hip_flex, knee]``.
-            Returned as a copy.
         """
-        dofs = self.leg_dof_indices[leg_index]
-        return self.data.qfrc_bias[dofs].copy()
+        p_base, R_base, _, _ = self._get_base_state()
+        q_joints = self.data.qpos[7:]
+        return self._kin.gravity_compensation(
+            leg_index, p_base, R_base, q_joints[3*leg_index:3*leg_index+3]
+        )
 
     # ==========================
     # Legacy
