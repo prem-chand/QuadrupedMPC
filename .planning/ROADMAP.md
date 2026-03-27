@@ -53,7 +53,15 @@ Extension of existing MuJoCo-based MIT Cheetah-style convex MPC controller to su
   8. Single-step controller validation matches MuJoCo behavior (identical torques within tolerance)
   9. QP solver infeasibility handled gracefully with fallback
 
-**Plans:** TBD
+**Plans:** Not created yet (Phase 1 must complete first - requires Go2Kinematics verified)
+
+---
+
+### Phase 2: IsaacLab Backend
+
+**Plans:** 2 plans created
+- [x] 2-01-PLAN.md — IsaacRobot core implementation (Robot ABC methods)
+- [x] 2-02-PLAN.md — Validation + QP infeasibility handling
 
 ---
 
@@ -81,7 +89,7 @@ Extension of existing MuJoCo-based MIT Cheetah-style convex MPC controller to su
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Manual Kinematics | 0/6 | Not started | - |
-| 2. IsaacLab Backend | 0/9 | Not started | - |
+| 2. IsaacLab Backend | 2/2 | Planned | - |
 | 3. Batched GPU MPC | 0/5 | Not started | - |
 
 ---

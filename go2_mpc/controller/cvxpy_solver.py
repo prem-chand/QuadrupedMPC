@@ -57,7 +57,7 @@ class ClarabelSolver:
         sol = solver.solve()
 
         if sol.status not in (clarabel.SolverStatus.Solved, clarabel.SolverStatus.AlmostSolved):
-            return None
+            return np.zeros(n, dtype=np.float64)
 
         return np.array(sol.x)
 
@@ -98,6 +98,6 @@ class CVXPYSolver:
             return None
 
         if problem.status not in ["optimal", "optimal_inaccurate"]:
-            return None
+            return np.zeros(n, dtype=np.float64)
 
         return z.value
