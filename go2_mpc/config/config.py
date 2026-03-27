@@ -46,14 +46,30 @@ class GaitConfig:
 @dataclass
 class ControllerConfig:
     mpc_decimation: int
-    force_control_decimation: int  # New: force control loop frequency
-    motion_control_decimation: int  # New: motion control loop frequency
+    force_control_decimation: int
+    motion_control_decimation: int
     force_smooth_alpha: float
     default_height: float
     torque_limit: float
     swing_kp: float
     swing_kd: float
     foot_stance_offsets: np.ndarray
+
+
+# ==========================================================
+# Balance Controller
+# ==========================================================
+
+@dataclass
+class BalanceConfig:
+    roll_threshold: float = 0.15
+    pitch_threshold: float = 0.15
+    vel_threshold: float = 0.3
+    angular_threshold: float = 1.0
+    recovery_stance_ratio: float = 0.75
+    normal_stance_ratio: float = 0.65
+    recovery_time: float = 0.5
+    enabled: bool = True
 
 
 # ==========================================================
@@ -66,6 +82,7 @@ class SystemConfig:
     mpc: MPCConfig
     gait: GaitConfig
     controller: ControllerConfig
+    balance: BalanceConfig = None
 
 
 # ==========================================================
@@ -107,5 +124,15 @@ def default_config() -> SystemConfig:
                 [-0.1934,  0.142, 0.0],  # RL
                 [-0.1934, -0.142, 0.0],  # RR
             ]),
+        ),
+        balance=BalanceConfig(
+            roll_threshold=0.15,
+            pitch_threshold=0.15,
+            vel_threshold=0.3,
+            angular_threshold=1.0,
+            recovery_stance_ratio=0.75,
+            normal_stance_ratio=0.65,
+            recovery_time=0.5,
+            enabled=True,
         ),
     )
