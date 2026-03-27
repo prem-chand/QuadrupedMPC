@@ -46,14 +46,13 @@ class GaitConfig:
 @dataclass
 class ControllerConfig:
     mpc_decimation: int
+    force_control_decimation: int  # New: force control loop frequency
+    motion_control_decimation: int  # New: motion control loop frequency
     force_smooth_alpha: float
     default_height: float
     torque_limit: float
     swing_kp: float
     swing_kd: float
-    # (4, 3) Nominal foot stance XY positions relative to base CoM in body frame [FL, FR, RL, RR].
-    # Used as the anchor point for the Raibert foot placement heuristic.
-    # Computed from go2.xml: hip_pos + thigh_offset (Z ignored, set from liftoff height).
     foot_stance_offsets: np.ndarray
 
 
@@ -83,9 +82,9 @@ def default_config() -> SystemConfig:
             mass=15.2,
             inertia=np.diag([0.18, 0.35, 0.3]),
             horizon=10,
-            dt=0.03,
-            Q=np.diag([1, 5, 100, 10, 10, 5, 5, 5, 12, 10, 3, 2]),
-            R=np.diag([1e-4] * 12),
+            dt=0.01,  # 100 Hz MPC (was 0.03 = 33 Hz)
+            Q=np.diag([5, 5, 50, 20, 20, 10, 8, 8, 15, 15, 5, 3]),  # Tuned for Go2
+            R=np.diag([1e-3] * 12),
             mu=0.6,
             f_max=180.0,
         ),
@@ -94,17 +93,19 @@ def default_config() -> SystemConfig:
             stance_ratio=0.65,
         ),
         controller=ControllerConfig(
-            mpc_decimation=3,
+            mpc_decimation=10,      # 100 Hz MPC (sim_dt * 10 = 0.01s)
+            force_control_decimation=2,  # 500 Hz force control
+            motion_control_decimation=2,  # 500 Hz motion control
             force_smooth_alpha=0.1,
             default_height=0.32,
             torque_limit=35.0,
-            swing_kp=400.0,
-            swing_kd=10.0,
+            swing_kp=500.0,  # Tuned: higher for more responsive swing
+            swing_kd=15.0,   # Tuned: higher damping
             foot_stance_offsets=np.array([
-                [ 0.1934,  0.142, 0.0],  # FL: hip_y(0.0465) + thigh_y(0.0955)
-                [ 0.1934, -0.142, 0.0],  # FR: hip_y(-0.0465) + thigh_y(-0.0955)
-                [-0.1934,  0.142, 0.0],  # RL: hip_y(0.0465) + thigh_y(0.0955)
-                [-0.1934, -0.142, 0.0],  # RR: hip_y(-0.0465) + thigh_y(-0.0955)
+                [ 0.1934,  0.142, 0.0],  # FL
+                [ 0.1934, -0.142, 0.0],  # FR
+                [-0.1934,  0.142, 0.0],  # RL
+                [-0.1934, -0.142, 0.0],  # RR
             ]),
         ),
     )
