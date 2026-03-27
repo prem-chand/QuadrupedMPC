@@ -6,9 +6,9 @@ Extension of existing MuJoCo-based MIT Cheetah-style convex MPC controller to su
 
 ## Phases
 
-- [ ] **Phase 1: Manual Kinematics & Dynamics** - Replace MuJoCo FK/Jacobian with verified analytical implementations
-- [ ] **Phase 2: IsaacLab Backend** - Implement IsaacRobot ABC, validate controller behavior in IsaacLab
-- [ ] **Phase 3: Batched GPU MPC** - GPU-accelerated QP solver for parallel environments
+- [x] **Phase 1: Manual Kinematics & Dynamics** - Replace MuJoCo FK/Jacobian with verified analytical implementations
+- [x] **Phase 2: IsaacLab Backend** - Implement IsaacRobot ABC, validate controller behavior in IsaacLab
+- [x] **Phase 3: Batched GPU MPC** - GPU-accelerated QP solver for parallel environments
 
 ---
 
@@ -80,7 +80,8 @@ Extension of existing MuJoCo-based MIT Cheetah-style convex MPC controller to su
   4. Solver handles infeasible batch elements gracefully with fallback to previous solution
   5. NaN/Inf detection triggers CPU fallback for problematic batch elements without crashing
 
-**Plans:** TBD
+**Plans:** 1 plan created
+- [x] 3-01-PLAN.md — Batched MPC implementation (GPU solver + BatchedConvexMPC + BatchedWBC)
 
 ---
 
@@ -88,9 +89,9 @@ Extension of existing MuJoCo-based MIT Cheetah-style convex MPC controller to su
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Manual Kinematics | 0/6 | Not started | - |
-| 2. IsaacLab Backend | 2/2 | Planned | - |
-| 3. Batched GPU MPC | 0/5 | Not started | - |
+| 1. Manual Kinematics | ✓ | Complete | ✓ |
+| 2. IsaacLab Backend | 2/2 | Complete | ✓ |
+| 3. Batched GPU MPC | 1/1 | Complete | ✓ |
 
 ---
 
@@ -104,4 +105,41 @@ Extension of existing MuJoCo-based MIT Cheetah-style convex MPC controller to su
 
 ---
 
+## Milestone v1.1: MIT Cheetah Parity
+
+### Phase 4: State Estimation (Kalman Filter)
+
+**Goal:** Implement Linear Kalman Filter for robust state estimation matching MIT Cheetah.
+
+**Requirements:** EST-01, EST-02, EST-03
+
+**Success Criteria:**
+1. LKF estimates base position/velocity from IMU + encoders
+2. Fused orientation from gyro has < 1° drift over 10s
+3. Contact-embedded velocity integration reduces position drift
+
+### Phase 5: Controller Frequency & Tuning
+
+**Goal:** Increase control frequencies and tune parameters.
+
+**Requirements:** CTRL-01, CTRL-02, TUNE-01, TUNE-02, TUNE-03
+
+**Success Criteria:**
+1. MPC runs at 100 Hz with < 5ms solve time
+2. WBC runs at 500 Hz
+3. Stable walking on flat ground with tuned parameters
+
+### Phase 6: Balance Controller
+
+**Goal:** Add push recovery and disturbance rejection.
+
+**Requirements:** BAL-01, BAL-02
+
+**Success Criteria:**
+1. Robot recovers from 5N push within 0.5s
+2. Reactive gait switching triggers on disturbance
+
+---
+
 *Roadmap created: 2026-03-27*
+*Updated: 2026-03-27 with MIT Cheetah parity roadmap*

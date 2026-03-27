@@ -89,11 +89,46 @@ Requirements for extending to IsaacLab and batched GPU MPC.
 | ROB-02 | Phase 2 | Pending |
 | ROB-03 | Phase 1 | Pending |
 
-**Coverage:**
-- v1 requirements: 21 total
-- Mapped to phases: 21
-- Unmapped: 0 ✓
+---
+
+## v1.1 Requirements: MIT Cheetah Parity
+
+### State Estimation (High Priority)
+
+- [ ] **EST-01**: Implement Linear Kalman Filter for base position/velocity estimation
+- [ ] **EST-02**: Fuse IMU gyro data for orientation tracking  
+- [ ] **EST-03**: Add velocity estimation from contact-embedded integration
+
+### Controller Tuning (High Priority)
+
+- [ ] **CTRL-01**: Increase MPC frequency to 100 Hz (from 33 Hz)
+- [ ] **CTRL-02**: Increase WBC frequency to 500 Hz (from 100 Hz)
+
+### Balance & Robustness (High Priority)
+
+- [ ] **BAL-01**: Implement BalanceController for push recovery
+- [ ] **BAL-02**: Add disturbance rejection via reactive gait switching
+
+### Parameter Tuning (Medium Priority)
+
+- [ ] **TUNE-01**: Tune MPC Q/R weights for Go2 dynamics
+- [ ] **TUNE-02**: Tune WBC gains for stable walking
+- [ ] **TUNE-03**: Calibrate friction coefficient for different surfaces
+
+### Terrain (Lower Priority - Stretch)
+
+- [ ] **TERR-01**: Add terrain height estimation
+- [ ] **TERR-02**: Adapt contact schedule for slopes
+
+## v1.1 Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| Nonlinear MPC | Linear MPC sufficient for current speed range |
+| Hardware deployment | Simulation validation first |
+| Full stair climbing | Requires perception stack |
 
 ---
+
 *Requirements defined: 2026-03-27*
-*Last updated: 2026-03-27 after research synthesis*
+*Last updated: 2026-03-27 after MIT Cheetah comparison*
