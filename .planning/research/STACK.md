@@ -1,184 +1,159 @@
-# Technology Stack
+# Technology Stack: Classical MPC for Quadruped Robots (2023-2025)
 
-**Project:** QuadrupedMPC - Extension for IsaacLab & Batched GPU MPC
-**Researched:** 2026-03-27
+**Project:** QuadrupedMPC — Classical MPC Controller
+**Researched:** March 2026
 **Confidence:** HIGH (verified via official docs, GitHub, arXiv)
 
-## Recommended Stack
-
-### Core Simulation Backend
-
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| **IsaacLab** | v2.0+ | GPU-accelerated simulation | Industry standard for quadruped RL; 6,752 stars; native support for Unitree Go2; deterministic physics; 10,000+ fps on RTX GPU |
-| **Isaac Sim** | Latest | Underlying physics engine | NVIDIA Omniverse-based; physically accurate; supports USD workflow |
-| **MuJoCo** | v3.0+ | Fallback / dev simulation | Keep for rapid prototyping;MJX provides GPU acceleration |
-
-**Rationale:** IsaacLab is the de facto standard for quadruped locomotion research (Spot, ANYmal, Unitree). It provides:
-- GPU-parallelized simulation (10K+ envs on single RTX GPU)
-- Native Unitree Go2 robot description (USD format)
-- Integrated RL training pipeline with RSL-RL
-- Deterministic physics for reproducible sim-to-real transfer
-
-**Confidence:** HIGH — IsaacLab paper published 2025, actively maintained by NVIDIA, used in Spot quadruped training (NVIDIA blog 2024).
-
 ---
 
-### RL Training (if MPC-augmented RL is goal)
+## QP Solvers for Convex MPC
 
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| **RSL-RL** | v5.0+ | RL algorithms (PPO) | 2.4K stars; integrated with IsaacLab out-of-the-box; multi-GPU support; proven on all major quadrupeds |
-| **legged_gym** | Latest | Isaac Gym legacy | Still relevant for Isaac Gym users; IsaacLab is successor |
+The QP solver is the computational bottleneck in centroidal dynamics MPC. Research from 2023-2025 shows a clear trend from general-purpose solvers (CVXPY/CLARABEL) toward robotics-specific implementations.
 
-**Rationale:** RSL-RL is the canonical choice for IsaacLab. It provides clean extension points, multi-GPU training, and is used by NVIDIA for Spot training (see NVIDIA Technical Blog 2024).
-
-**Confidence:** HIGH — RSL-RL v5.0 released March 2026; IsaacLab docs recommend it.
-
----
-
-### GPU-Accelerated Batched MPC Solvers
+### Recommended CPU Solvers
 
 | Technology | Purpose | When to Use | Why |
 |------------|---------|-------------|-----|
-| **ReLU-QP** | GPU QP solver for MPC | Batch solving across 1000+ envs | Uses ADMM with GPU kernels; 10-100x faster than CPU solvers; specifically designed for MPC; arXiv 2023 |
-| **OSQP + cu12 backend** | Differentiable QP | Need gradient flow to policy | Native CUDA support; differentiable via osqpth; well-documented |
-| **Custom Torch QP** | Simple batched MPC | Full control over solver | Use `torch.linalg.solve` for unconstrained or custom ADMM loop; maximum flexibility |
-| **ProxQP** | Efficient QP (CPU) | Prototyping / smaller batches | Fast CPU solver; good for <100 parallel envs; Python-native API |
+| **OSQP** | Production QP solver | Real-time control (33-100 Hz) | Mature, widely deployed in robotics (MIT, ETH); ~5-10ms solve time |
+| **ProxQP** | Efficient QP solver | Alternative to OSQP | Fast forbox-constrained QPs; Python-native; comparable performance |
+| **qpOASES** | Active-set QP solver | Legacy systems, hardware | Proven in Boston Dynamics Spot; efficient for small QPs |
+| **CLARABEL** | Interior-point solver | Prototyping | Currently in use; good but slower than OSQP/ProxQP |
 
-**NOT RECOMMENDED:**
-- **CVXPY/CLARABEL** (current): Not GPU-accelerated; single-solve only; too slow for batched MPC across 1000+ envs
-- **qpSWIFT**: CPU-only; no GPU support
+### GPU-Accelerated Solvers (for Batched MPC)
 
-**Rationale for ReLU-QP:** 
-- Specifically designed for batched MPC in robotics (paper: IEEE ICRA 2024)
-- GPU-native via CUDA
-- Solves multiple QPs in parallel (one per environment)
-- MIT license, actively maintained
+| Technology | Purpose | When to Use | Why |
+|------------|---------|-------------|-----|
+| **ReLU-QP** | GPU batched QP | 1000+ parallel envs | ICRA 2024; 10-100x faster than CPU; designed for MPC |
+| **Custom Torch QP** | Batched solving | Full control | torch.linalg.solve for unconstrained; custom ADMM for constrained |
+| **GATO** | Batched trajectory optimization | RL training pipelines | arXiv 2025; extends ReLU-QP for whole trajectory |
 
-**Confidence:** MEDIUM — ReLU-QP has 142 stars, published in IEEE ICRA 2024. GATO (2025) shows newer research direction but less mature.
+### NOT Recommended for Production
 
----
-
-### IsaacLab Robot Interface
-
-| Component | Purpose | Integration |
-|-----------|---------|-------------|
-| `isaaclab.assets.articulation.Articulation` | Robot state access | Get joint positions, velocities, apply torques |
-| `isaaclab.assets.articulation.ArticulationCfg` | Robot configuration | Load USD, configure joints, control modes |
-| `isaaclab.controllers.OperationalSpaceController` | WBC example | Reference implementation for whole-body control |
-| Custom `Robot` ABC | Your controller interface | Mirror existing `core/robot.py` pattern |
-
-**Integration Pattern:**
-```
-IsaacLab Articulation → Custom Robot ABC → Your existing controller/
-                                              (convex_mpc.py, wbc.py, etc.)
-```
-
-**Confidence:** HIGH — IsaacLab documentation covers this pattern; `run_osc.py` tutorial shows exact integration.
-
----
-
-### Optional: GPU-Accelerated MuJoCo
-
-| Technology | Purpose | When to Use |
+| Technology | Why Not | Alternative |
 |------------|---------|-------------|
-| **MuJoCo MJX** | GPU backend for MuJoCo | If staying with MuJoCo but need GPU speedup |
-| **MuJoCo Warp** | Differentiable physics | For model-based RL with gradients |
+| **CVXPY/CLARABEL** (current) | Single-solve, CPU-only, ~20ms overhead | Replace with OSQP or ProxQP |
+| **qpSWIFT** | CPU-only, no GPU support | ReLU-QP for GPU needs |
+| **scipy.optimize** | Not designed for QP | OSQP/ProxQP |
 
-**Note:** If IsaacLab integration is complex, MJX provides intermediate GPU acceleration for MuJoCo without full simulator switch.
+---
+
+## Nonlinear MPC Solvers
+
+For high-speed locomotion (>2 m/s) or rough terrain, nonlinear MPC provides better accuracy but at higher computational cost.
+
+| Technology | Purpose | When to Use | Why |
+|------------|---------|-------------|-----|
+| **acados** | Embedded NMPC | Production nonlinear control | HQP solver; efficient; used by IIT DLSLab; Python/C interfaces |
+| **CasADi** | Symbolic NMPC | Prototyping, research | Flexible; good IPOPT integration; steeper learning curve |
+| **ATARI NMPC** | Real-time NMPC | Research platforms | Python-based; active development |
+
+**Trade-off:** Nonlinear MPC: ~20-50ms solve time vs Linear MPC: ~5-10ms. Only worth it for speeds >2 m/s or dynamic maneuvers.
+
+---
+
+## Core Simulation Backend
+
+| Technology | Purpose | Why |
+|------------|---------|-----|
+| **MuJoCo** | Physics simulation | Current backend; well-validated; MJX provides GPU acceleration |
+| **IsaacLab** | GPU-parallel simulation | For batched RL training; 10K+ parallel envs |
+
+---
+
+## Open Source Implementations (Reference)
+
+### Production-Grade MIT Cheetah-style
+
+| Repository | Stars | Language | Notes |
+|------------|-------|----------|-------|
+| **ShuoYangRobotics/A1-QP-MPC-Controller** | 812 | C++ | Most complete MIT Cheetah clone; qpOASES; tested on Unitree A1 |
+| **iit-DLSLab/Quadruped-PyMPC** | 440 | Python | acados or JAX solvers; gradient-based or sampling-based |
+| **zha0ming1e/legged_mpc_control** | 64 | C++ | Multiple MPC algorithms; Unitree A1/Go1 |
+| **PMY9527/QUAD-MPC-SIM-HW** | 62 | C++ | Sim & real tested; Unitree A1/Go1 |
+
+### Research Implementations
+
+| Repository | Focus | Notes |
+|------------|-------|-------|
+| **boihhs/Go1-QP-MPC-Controller-Real** | Real hardware | Unitree Go1 real robot deployment |
+| **Mr-Y-B-L/unitreeMPC_guide** | Educational | Adds MPC to official Unitree guide |
+| **Alexyskoutnev/Quadruped-Trajectory-Optimization-Stack** | Planning | Full trajectory optimization framework |
 
 ---
 
 ## Installation
 
-### IsaacLab (recommended path)
+### OSQP (Recommended CPU Solver)
 
 ```bash
-# 1. Install Isaac Sim (NVIDIA Omniverse)
-# Download from NVIDIA website (requires RTX GPU for best performance)
+# Via pip
+pip install osqp
 
-# 2. Clone Isaac Lab
-git clone https://github.com/isaac-sim/IsaacLab.git
-cd IsaacLab
-
-# 3. Create environment and install
-./scripts/create_conda_env.sh  # Creates isaaclab conda env
-source scripts/isaaclab_shell.sh
-
-# 4. Install dependencies
-pip install torch  # Use CUDA-enabled torch for GPU training
-pip install rsl-rl-lib  # RL training
+# Or from source for optimizations
+git clone https://github.com/osqp/osqp.git
+cd osqp
+mkdir build && cd build
+cmake .. && make
+pip install osqp
 ```
 
-### ReLU-QP (GPU-accelerated QP solver)
+### ProxQP (Alternative CPU Solver)
 
 ```bash
-# Install from source (requires CUDA)
+pip install proxsuite
+```
+
+### acados (For Nonlinear MPC)
+
+```bash
+# Install acados
+git clone https://github.com/acados/acados.git
+cd acados
+mkdir -p build && cd build
+cmake .. -DACADOS_WITH_QPOASES=ON -DACADOS_WITH_OSQP=ON
+make -j4
+make install
+
+# Python bindings
+pip install acados
+```
+
+### ReLU-QP (GPU Batched)
+
+```bash
+# Requires CUDA
 git clone https://github.com/RoboticExplorationLab/ReLUQP-py.git
 cd ReLUQP-py
 pip install -e .
 ```
 
-### For custom batched Torch MPC
-
-```bash
-# Standard PyTorch with CUDA (likely already installed)
-# Use torch.compile for JIT acceleration
-pip install torch --index-url https://download.pytorch.org/whl/cu121
-```
-
 ---
 
-## Architecture for Batched MPC + RL
-
-### Option A: IsaacLab + RSL-RL + ReLU-QP (Recommended)
+## Architecture: Two-Layer MPC-WBC
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    IsaacLab Simulation                       │
-│  (10,000 parallel environments, GPU-accelerated physics)   │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│              Custom Robot Interface (ABC)                   │
-│  get_joint_state() → get_foot_positions() → etc.           │
-└─────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────┼───────────────┐
-              ▼               ▼               ▼
-     ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-     │ GaitScheduler│  │ Convex MPC   │  │ WBC (J^T F)  │
-     │ (phase-based)│  │(ReLU-QP GPU)│  │(Torch batch) │
-     └──────────────┘  └──────────────┘  └──────────────┘
-              │               │               │
-              └───────────────┼───────────────┘
-                              ▼
-              ┌──────────────────────────────┐
-              │    Torque Commands (batched) │
-              │   Shape: (num_envs, 12)      │
-              └──────────────────────────────┘
-                              │
-                              ▼
-              ┌──────────────────────────────┐
-              │     RSL-RL PPO Agent         │
-              │  (optional: learn residual)  │
-              └──────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                   High-Level (30-100 Hz)                 │
+│  ┌─────────────────┐    ┌─────────────────────────┐    │
+│  │ Gait Scheduler  │───▶│  Convex MPC (QP Solver) │    │
+│  │ (phase-based)   │    │  Centroidal Dynamics    │    │
+│  └─────────────────┘    └───────────┬─────────────┘    │
+│                                     │                   │
+│                                     ▼                   │
+│                            Contact Forces (12-dim)      │
+└─────────────────────────────────────┬───────────────────┘
+                                      │
+┌─────────────────────────────────────┴───────────────────┐
+│                   Low-Level (1 kHz)                     │
+│  ┌─────────────────┐    ┌─────────────────────────┐     │
+│  │  WBC (J^T F)   │───▶│   Swing Leg Controller  │     │
+│  │ + Gravity Comp │    │   (Cartesian PD + Bezier)    │
+│  └─────────────────┘    └─────────────────────────┘     │
+│           │                                                 │
+│           ▼                                                 │
+│      Joint Torques (12)                                    │
+└─────────────────────────────────────────────────────────┘
 ```
-
-**Why this architecture:**
-- IsaacLab handles physics in parallel on GPU
-- Your MPC controller processes batched states (num_envs, 12) each step
-- ReLU-QP solves QP for each environment in parallel on GPU
-- RSL-RL trains on collected experience
-
-### Option B: Keep MuJoCo, Add MJX (Simpler)
-
-If IsaacLab integration is too complex:
-- Use MuJoCo MJX for GPU-accelerated physics
-- Keep existing controller structure
-- Implement batched MPC via custom Torch solver
 
 ---
 
@@ -186,11 +161,11 @@ If IsaacLab integration is too complex:
 
 | Goal | Recommended Stack |
 |------|-------------------|
-| **IsaacLab backend** | IsaacLab v2.0+ + RSL-RL v5.0+ |
-| **GPU batched MPC** | ReLU-QP or custom Torch batched QP |
-| **RL training** | RSL-RL (integrates with IsaacLab) |
-| **Keep MuJoCo** | Stick with CVXPY/CLARABEL for single-solve; too slow for batching |
-| **Differentiable MPC** | OSQP with osqpth or torch custom |
+| **Single-solve real-time MPC** | OSQP or ProxQP (CPU) |
+| **GPU batched MPC for RL** | ReLU-QP or custom Torch |
+| **Nonlinear MPC** | acados |
+| **Keep current solver** | CLARABEL (works but slower) |
+| **Production hardware deployment** | qpOASES (proven in Spot) |
 
 ---
 
@@ -198,19 +173,20 @@ If IsaacLab integration is too complex:
 
 | Source | Type | Confidence |
 |--------|------|------------|
-| IsaacLab GitHub (6,752 stars) | Official | HIGH |
-| RSL-RL GitHub (2,400 stars) | Official | HIGH |
-| IsaacLab Paper (Mittal et al., 2025) | arXiv | HIGH |
+| ShuoYangRobotics/A1-QP-MPC-Controller (812 stars) | GitHub | HIGH |
+| iit-DLSLab/Quadruped-PyMPC (440 stars) | GitHub | HIGH |
+| OSQP Documentation | Official | HIGH |
+| ProxQP Documentation | Official | HIGH |
 | ReLU-QP Paper (Bishop et al., ICRA 2024) | arXiv | HIGH |
-| NVIDIA Blog: Spot Quadruped with IsaacLab | Official | HIGH |
-| GATO (Du et al., 2025) | arXiv | MEDIUM (new research) |
+| Cafe-MPC Paper (arXiv:2403.03995) | arXiv | HIGH |
+| acados Documentation | Official | HIGH |
 
 ---
 
 ## Open Questions
 
-1. **IsaacLab + custom MPC integration complexity?** — Need to verify exact API for applying torques per timestep
-2. **ReLU-QP maturity?** — 142 stars vs. 2,400 for RSL-RL; verify it handles friction cone constraints natively
-3. **Single-GPU training vs. multi-GPU?** — For 10K envs, may need multi-GPU; RSL-RL supports this
+1. **OSQP vs ProxQP for quadruped QPs?** — No direct benchmark for centroidal dynamics QPs; both suitable
+2. **qpOASES integration complexity?** — More complex API than OSQP; may not be worth it unless deploying to Spot-class hardware
+3. **acados learning curve?** — Steeper than Python solvers; consider Quadruped-PyMPC as reference
 
-**Recommendation:** Start with IsaacLab + single-solve MPC (keeping CLARABEL) as baseline; profile before adding ReLU-QP complexity.
+**Recommendation:** Start with OSQP (easy drop-in replacement for CLARABEL); profile before trying alternatives.

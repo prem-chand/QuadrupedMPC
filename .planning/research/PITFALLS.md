@@ -1,58 +1,60 @@
-# Domain Pitfalls: Quadruped MPC Controllers
+# Domain Pitfalls: Classical MPC Controllers for Quadruped Robots (2023-2025)
 
-**Domain:** Legged robot control / Model Predictive Control
-**Researched:** 2026-03-27
-**Project Context:** Adding IsaacLab backend + GPU batched MPC solver to existing MuJoCo-based MPC-WBC controller
+**Domain:** Legged Robot Control — Model Predictive Control
+**Researched:** March 2026
+
+---
 
 ## Overview
 
-This document catalogs critical, moderate, and minor pitfalls specific to quadruped MPC development, with emphasis on the transition from CPU-based solvers (CVXPY/CLARABEL) to GPU-accelerated batched MPC, and simulator backend migration (MuJoCo → IsaacLab).
+This document catalogs critical, moderate, and minor pitfalls specific to classical quadruped MPC development. These are derived from practitioner experience, published post-mortems, and common implementation issues documented in the literature.
 
 ---
 
 ## Critical Pitfalls
 
-These are mistakes that cause system instability, complete controller failure, or require fundamental architectural rewrites.
+These mistakes cause system instability, complete controller failure, or require fundamental rewrites.
 
-### 1. QP Solver Infeasibility and Divergence
+### 1. QP Solver Infeasibility
 
-**What goes wrong:** The quadratic program solver fails to converge or returns infeasible solutions, causing the robot to fall or exhibit erratic behavior.
+**What goes wrong:** QP solver fails to converge or returns infeasible solutions, causing immediate robot fall.
 
-**Why it happens:** 
-- Contact schedule conflicts (e.g., requesting force from a foot that should be in swing phase)
-- Friction cone constraints too restrictive for the commanded velocity
-- Poor reference trajectory causing physically impossible desired states
-- Numerical conditioning issues with poorly scaled Hessian matrices
+**Why it happens:**
+- Contact schedule conflicts (force requested from swing leg)
+- Friction cone constraints too restrictive (μ too high)
+- Poor reference trajectory (physically impossible desired states)
+- Poorly conditioned Hessian matrices (numerical issues)
 
-**Consequences:** 
+**Consequences:**
 - Robot falls immediately
-- Torque spikes causing joint damage
-- Complete loss of locomotion
+- Torque spikes → joint damage
+- Complete locomotion failure
 
 **Prevention:**
-- Implement constraint redundancy checks before solver call
-- Add fallback to previous valid solution with smoothing
-- Use regularization (small epsilon on diagonal of Hessian): `H + 1e-6 * I`
-- Clamp friction coefficient to conservative values (μ = 0.5–0.7 for indoor surfaces)
-- Validate contact schedule consistency: at least 2 legs in stance for stable trot
+- Regularization: `H + 1e-6 * I` on Hessian diagonal
+- Conservative friction coefficient: μ = 0.5–0.7 (not higher)
+- Fallback to previous valid solution with EMA smoothing
+- Validate contact schedule: at least 2 legs in stance for trot
+- Constraint redundancy checks before solver call
 
 **Detection:**
 - Monitor solver status flags (infeasible, unbounded, max iterations)
 - Log residual norms to detect convergence degradation
 - Watch for NaN/Inf in force solutions
 
-**Phase mapping:** Phase 2 (IsaacLab Integration) — simulator physics differences can cause previously stable contact schedules to become infeasible
+**Phase mapping:** Any phase with QP solver; especially critical when changing solvers
 
 ---
 
 ### 2. Jacobian Computation Errors
 
-**What goes wrong:** Incorrect leg Jacobian matrices cause wrong force distributions, WBC failures, or instability.
+**What goes wrong:** Incorrect leg Jacobian matrices cause wrong force distributions and instability.
 
 **Why it happens:**
-- Manual Jacobian implementation doesn't match simulator's convention
-- Rotation convention mismatch (active vs. passive joints)
-- Forward kinematics chain errors in URDF/mesh parsing
+- Manual Jacobian doesn't match simulator/robot convention
+- URDF joint axis misalignment
+- Forward kinematics chain errors
+- Row ordering mismatch (FL, FR, BL, BR)
 
 **Consequences:**
 - WBC produces incorrect torques
@@ -60,111 +62,48 @@ These are mistakes that cause system instability, complete controller failure, o
 - Oscillations that amplify until fall
 
 **Prevention:**
-- Verify Jacobian against simulator's built-in computation (use MuJoCo's `mj_jac` or IsaacLab's `compute_anc_jacobian_world`)
-- Test with zero-velocity joint positions — Jacobian should produce zero translational velocity
-- Implement analytical Jacobian and compare against numerical Jacobian: `J_num = (f(q+δ) - f(q-δ)) / (2δ)`
-- Check row ordering matches your force stacking order (FL, FR, BL, BR)
+- Verify against simulator's built-in Jacobian (MuJoCo: `mj_jac`, IsaacLab: `compute_anc_jacobian_world`)
+- Test with zero-velocity joints → Jacobian should give zero velocity
+- Compare analytical vs numerical Jacobian: `J_num = (f(q+δ) - f(q-δ)) / (2δ)`
+- Explicitly document leg ordering and match to force vector
 
 **Detection:**
-- Compare computed foot velocities against finite-differenced positions
-- Monitor for systematic drift in foot positions over gait cycles
-
-**Phase mapping:** Phase 1 (Replace MuJoCo Kinematics) — manual Jacobian implementation is directly tested here
+- Compare computed vs finite-differenced foot velocities
+- Monitor systematic foot position drift over gait cycles
 
 ---
 
-### 3. Simulator Physics Mismatch (MuJoCo → IsaacLab)
+### 3. Frame Transformation Confusion
 
-**What goes wrong:** Controller works in MuJoCo but fails immediately in IsaacLab due to physics differences.
+**What goes wrong:** Mixing world frame, body frame, and joint frame coordinates causes incorrect force application.
 
 **Why it happens:**
-- Different friction models (MuJoCo uses smooth friction, IsaacLab's PhysX uses different formulation)
-- Contact stiffness/damping parameters differ
-- Actuator model differences (MuJoCo direct torque vs. IsaacLab's implicit motor models)
-- Gravity direction or scale differences
+- MPC computes forces in body frame but WBC expects world frame
+- Foot positions from robot interface in different frames
+- Rotational transformations not applied consistently
 
 **Consequences:**
-- Robot slips in IsaacLab but not MuJoCo
-- Contact detection timing mismatch
-- Controller parameters (gains, thresholds) need complete retuning
+- Robot drifts sideways unexpectedly
+- Asymmetric gaits between left/right legs
+- Oscillations at turn initiation
 
 **Prevention:**
-- Expose friction coefficient, contact stiffness, and damping as configurable parameters
-- Use IsaacLab's `scales` to match Go2 mass/inertia to MuJoCo values
-- Test contact detection separately in both simulators before integrating controller
-- Implement contact force monitoring to detect simulation-specific behavior
-
-**Detection:**
-- Compare base height, joint torques, and contact forces between simulators
-- Log foot contact forces and compare timing patterns
-
-**Phase mapping:** Phase 2 (IsaacLab Integration) — primary target of this phase
+- Document frame convention explicitly:
+  - World = global inertial frame
+  - Body = yaw-rotated (Rᵀ × world)
+  - Joint = local leg coordinates
+- Add frame assertion checks in debug builds
+- Visualize forces in simulator to verify direction
 
 ---
 
-### 4. GPU Solver Numerical Instability
+### 4. Contact Schedule Timing Mismatch
 
-**What goes wrong:** Batched GPU solver produces NaN/Inf or diverges for some batch elements while others solve correctly.
-
-**Why it happens:**
-- Heterogeneous problem conditioning across batch elements (some easy, some hard)
-- Memory access patterns causing thread divergence
-- Floating-point precision issues with large horizon lengths
-- Lack of warm-starting in GPU implementation
-
-**Consequences:**
-- Some environments fail while others work
-- Training instability in RL-MPC setups
-- Silent failures that corrupt learning
-
-**Prevention:**
-- Implement per-problem regularization tuning
-- Add NaN/Inf checks on output and fallback to CPU solver
-- Use mixed-precision carefully — accumulate in FP64 for critical computations
-- Batch similar-difficulty problems together (sort by velocity magnitude)
-
-**Detection:**
-- Monitor solution quality metrics (primal/dual residuals) per batch element
-- Log failure counts per batch iteration
-
-**Phase mapping:** Phase 3 (GPU Batched MPC) — direct challenge of this phase
-
----
-
-## Moderate Pitfalls
-
-These cause degraded performance, require workarounds, or limit controller capabilities.
-
-### 5. State Estimation Latency
-
-**What goes wrong:** State estimator introduces delay between true robot state and controller input, causing predictive mismatch.
-
-**Why it happens:**
-- Filtering (EKF, moving average) introduces phase lag
-- Callback-based state extraction has asynchronous timing
-- IsaacLab's observation buffer has default delays
-
-**Consequences:**
-- Degraded tracking at high speeds
-- Oscillations that appear as "controller tuning" issues
-- MPC horizon becomes less accurate
-
-**Prevention:**
-- Timestamp all state measurements and compensate for delay
-- Use higher-rate state estimation (IMU integration at 1 kHz)
-- Account for observation delay in MPC prediction: `x_ref(t + dt_delay)`
-
-**Phase mapping:** Phase 2 (IsaacLab Integration) — IsaacLab's rigid body physics may have different latency characteristics
-
----
-
-### 6. Contact Schedule Timing Mismatch
-
-**What goes wrong:** Gait scheduler predicts contact events at different times than simulator detects them.
+**What goes wrong:** Gait scheduler predicts contact events at different times than physics simulation.
 
 **Why it happens:**
 - Phase computation uses wall-clock time but simulation may step differently
-- Contact detection threshold differs between MuJoCo and IsaacLab
+- Contact detection threshold differs between simulators
 - Swing leg lands early/late relative to schedule
 
 **Consequences:**
@@ -172,125 +111,154 @@ These cause degraded performance, require workarounds, or limit controller capab
 - Robot trips or lurches unexpectedly
 
 **Prevention:**
-- Use simulator's actual contact state rather than schedule for WBC switching
-- Add small grace period around phase transitions (10-20 ms)
+- Use actual contact state from simulator rather than schedule for WBC switching
+- Add grace period around phase transitions (10-20 ms)
 - Implement contact force threshold monitoring
-
-**Phase mapping:** Phase 2 (IsaacLab Integration) — contact detection differs between simulators
+- Separate contact detection from contact scheduling
 
 ---
 
-### 7. Reference Trajectory Generation Mismatch
+## Moderate Pitfalls
 
-**What goes wrong:** MPC reference trajectory doesn't match what the robot can actually achieve, causing persistent tracking errors.
+These cause degraded performance, require workarounds, or limit capabilities.
+
+### 5. State Estimation Latency
+
+**What goes wrong:** State estimator introduces delay between true robot state and controller input.
 
 **Why it happens:**
-- Assumed velocity/acceleration limits in trajectory don't match robot limits
+- Filtering (EKF, moving average) introduces phase lag
+- Callback-based state extraction has asynchronous timing
+- Default observation buffers have delays
+
+**Consequences:**
+- Degraded tracking at high speeds
+- Oscillations appearing as "tuning issues"
+- MPC horizon becomes less accurate
+
+**Prevention:**
+- Timestamp all state measurements and compensate for delay
+- Use higher-rate state estimation (IMU integration at 1 kHz)
+- Account for observation delay in MPC prediction: `x_ref(t + dt_delay)`
+
+---
+
+### 6. Reference Trajectory Mismatch
+
+**What goes wrong:** MPC reference trajectory doesn't match achievable robot behavior.
+
+**Why it happens:**
+- Assumed velocity/acceleration limits don't match robot limits
 - No momentum planning — MPC assumes instant velocity changes
 - Body orientation not accounted for in 2D projection
 
 **Consequences:**
-- MPC solves for forces the robot cannot execute
+- MPC solves for forces robot cannot execute
 - Persistent position error during aggressive commands
 
 **Prevention:**
-- Clip commanded velocity to achievable range (< 1.5 m/s for Go2)
+- Clip commanded velocity to achievable range (<1.5 m/s for Go2)
 - Include angular velocity in reference trajectory
 - Add acceleration constraints to trajectory generator
 
-**Phase mapping:** Any phase — affects all controller operation
+---
+
+### 7. Solver Performance Regression
+
+**What goes wrong:** Solver becomes slower over time or with different parameters.
+
+**Why it happens:**
+- Matrix conditioning changes with robot configuration
+- Different contact schedules produce different QP structures
+- Memory allocation overhead in Python solvers
+
+**Consequences:**
+- Control loop misses real-time deadline
+- Reduced effectiveness (lower MPC rate)
+
+**Prevention:**
+- Profile solver across diverse configurations
+- Use warm-starting from previous solution
+- Set maximum iteration limits to bound worst-case time
 
 ---
 
 ### 8. Force Smoothing Causes Phase Lag
 
-**What goes wrong:** Exponential moving average (EMA) on contact forces introduces lag, causing late touchdown detection.
+**What goes wrong:** EMA on contact forces introduces lag, causing late touchdown detection.
 
 **Why it happens:**
-- `force_smooth = alpha * force_raw + (1 - alpha) * force_smooth` with alpha too low
+- `force_smooth = α * force_raw + (1-α) * force_smooth` with α too low
 - Default smoothing parameters tuned for one gait don't work for others
 
 **Consequences:**
 - Late swing-to-stance transition
-- Foot penetrates ground before force is detected
+- Foot penetrates ground before force detected
 - Gait appears "sluggish"
 
 **Prevention:**
-- Use higher alpha for faster response (0.7–0.9) or disable smoothing for contact detection
+- Use higher α for faster response (0.7–0.9)
 - Separate smooth force (for WBC) from raw force (for contact detection)
 - Tune per gait pattern
-
-**Phase mapping:** Phase 2 — gait pattern changes may require retuning
 
 ---
 
 ## Minor Pitfalls
 
-These cause minor issues, require debugging effort, or represent missed optimization opportunities.
+These cause minor issues, require debugging effort, or represent missed opportunities.
 
-### 9. Frame Transformation Confusion
+### 9. Parameter Tuning Doesn't Transfer
 
-**What goes wrong:** Mixing world frame, body frame, and joint frame coordinates causes incorrect force application.
-
-**Why it happens:**
-- MPC computes forces in body frame but WBC expects world frame
-- Foot positions from robot interface in different frames than expected
-- Rotational transformations not applied consistently
-
-**Consequences:**
-- Robot drifts sideways unexpectedly
-- Asymmetric gaits between left/right legs
-
-**Prevention:**
-- Document frame convention explicitly: world = global, body = yaw-rotated, joint = local
-- Add frame assertion checks in debug builds
-- Visualize forces in RViz/Omniverse to verify direction
-
-**Phase mapping:** Phase 1 — manual kinematics implementation must match frame conventions
-
----
-
-### 10. Parameter Tuning Doesn't Transfer
-
-**What goes wrong:** Controller parameters (gains, thresholds) optimized in simulation fail on hardware or different simulator.
+**What goes wrong:** Controller parameters optimized in simulation fail on hardware.
 
 **Why it happens:**
 - Simulated friction, delay, and noise don't match reality
-- Actuator model differences (simulation uses ideal torque, hardware has back-EMF, friction)
+- Actuator model differences (ideal torque vs hardware with back-EMF, friction)
 - Sensor noise characteristics differ
 
 **Consequences:**
-- "It works in simulation but not on robot" scenario
-- Overly aggressive gains that cause oscillation
+- "Works in simulation but not on robot"
+- Overly aggressive gains causing oscillation
 
 **Prevention:**
 - Add 20% margin to all gain values
-- Test with injected noise to approximate hardware conditions
-- Keep hardware-specific parameters in separate config section
-
-**Phase mapping:** Phase 2 — new simulator backend reveals transferability issues
+- Test with injected noise to approximate hardware
+- Keep hardware-specific parameters in separate config
 
 ---
 
-### 11. Memory Layout Causes GPU Performance Issues
+### 10. Gait Transition Instability
 
-**What goes wrong:** Batched MPC runs slower than expected on GPU due to memory access patterns.
+**What goes wrong:** Switching between gaits (trot→bound) causes transients.
 
 **Why it happens:**
-- Non-contiguous memory for batched problems
-- CPU-GPU transfers in inner loop
-- Each batch element allocates separate GPU memory
-
-**Consequences:**
-- Training too slow to be practical
-- Can't achieve desired batch size
+- Contact schedule changes discontinuously
+- Foot positions from previous gait persist
+- MPC horizon has different requirements
 
 **Prevention:**
-- Use pinned memory and CUDA streams for async transfers
-- Pre-allocate batch buffers and reuse
-- Profile with NVIDIA Nsight to identify bottlenecks
+- Smooth contact schedule transition
+- Reset swing leg targets on gait change
+- Use consistent foot placement logic across gaits
 
-**Phase mapping:** Phase 3 (GPU Batched MPC)
+---
+
+### 11. Memory Allocation in Control Loop
+
+**What goes wrong:** Allocating new arrays/matrices each control cycle causes GC overhead.
+
+**Why it happens:**
+- Creating numpy arrays in Python loop
+- Not pre-allocating solver workspaces
+
+**Consequences:**
+- Variable latency (non-deterministic timing)
+- CPU spikes causing missed control deadlines
+
+**Prevention:**
+- Pre-allocate all matrices and vectors
+- Use in-place operations where possible
+- Reuse solver objects across timesteps
 
 ---
 
@@ -298,16 +266,40 @@ These cause minor issues, require debugging effort, or represent missed optimiza
 
 | Phase | Primary Pitfalls | Mitigation Priority |
 |-------|------------------|---------------------|
-| Phase 1: Replace MuJoCo Kinematics | Jacobian errors (#2), Frame transformation (#9) | Verify FK/Jacobian against simulator |
-| Phase 2: IsaacLab Integration | Physics mismatch (#3), Contact timing (#6), State latency (#5) | Parameter abstraction, contact force monitoring |
-| Phase 3: GPU Batched MPC | Solver instability (#4), Memory layout (#11) | Fallback to CPU, batch profiling |
+| Solver Upgrade (OSQP/ProxQP) | Infeasibility (#1), Warm-start issues | Test across diverse conditions |
+| Kinematics Implementation | Jacobian errors (#2), Frame confusion (#3) | Verify against simulator |
+| Multi-Gait Support | Contact timing (#4), Transition instability (#10) | Test gait switching extensively |
+| Hardware Deployment | Tuning transfer (#9), Latency (#5) | Add margins, test with noise |
 
 ---
 
 ## Sources
 
-- IsaacLab GitHub Issues: #2174 (friction/performance), #1898 (contact penetration), #1436 (instability)
-- NVIDIA Developer Forum: "Differences between Isaac Sim and MuJoCo Jacobians"
-- arXiv:2510.21773 — "Real-Time QP Solvers: Practical Guide Towards Legged Robots"
-- arXiv:2502.01329 — "Benchmarking Different QP Formulations and Solvers for Dynamic Quadrupedal Walking"
-- MuJoCo to IsaacLab friction model differences documented in IsaacLab discussions
+### Practitioner Guides
+
+- Real-Time QP Solvers: Practical Guide Towards Legged Robots (arXiv:2510.21773, 2025)
+- Benchmarking QP Formulations and Solvers for Dynamic Quadrupedal Walking (ICRA 2024)
+- Various GitHub issues and discussions from quadruped MPC repositories
+
+### Academic Sources
+
+- MIT Cheetah MPC papers (Di Carlo et al., 2018)
+- Cafe-MPC (arXiv:2403.03995, 2024)
+- ETH locomotion papers (2022-2024)
+
+### Community Knowledge
+
+- ShuoYangRobotics/A1-QP-MPC-Controller issues and discussions
+- Unitree community forums
+- ROS/walking_robotics discussions
+
+---
+
+## Confidence Assessment
+
+| Area | Confidence | Notes |
+|------|------------|-------|
+| QP solver pitfalls | HIGH | Well-documented in practitioner guides |
+| Jacobian/frame issues | HIGH | Common implementation errors |
+| Performance issues | MEDIUM | Hardware-dependent |
+| Transfer to hardware | MEDIUM | Limited publications |

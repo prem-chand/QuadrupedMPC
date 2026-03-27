@@ -1,401 +1,278 @@
-# Architecture Patterns: Batched GPU MPC with IsaacLab
+# Architecture Patterns: Classical MPC Controllers for Quadruped Robots (2023-2025)
 
-**Domain:** Quadruped Robot Control — MPC-WBC with GPU-Parallel RL Training
-**Researched:** 2026-03-27
-**Confidence:** MEDIUM-HIGH
+**Domain:** Quadrupedal Locomotion Control — MPC-WBC Architecture
+**Researched:** March 2026
+**Confidence:** HIGH
 
-## Recommended Architecture
+---
 
-For extending the existing MPC-WBC controller to IsaacLab with batched GPU MPC, the recommended architecture follows a **hierarchical controller with simulator-agnostic boundaries** pattern. This architecture enables parallel training across thousands of GPU environments while maintaining the clean separation between control algorithms and simulation backend already established in the project.
+## Dominant Architecture Patterns
+
+Research from 2023-2025 confirms two primary architectural patterns for classical quadruped MPC:
+
+### Pattern 1: Two-Layer MPC + WBC (Most Common)
+
+This is the MIT Cheetah architecture, still dominant in production systems:
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           RL TRAINING PIPELINE                                  │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐                   │
-│  │   IsaacLab   │────▶│   RL Agent   │────▶│  Env Reset   │                   │
-│  │  Simulator   │     │  (PPO/PPGR) │     │   Handler    │                   │
-│  │ (GPU Batched)│◀────│             │◀────│              │                   │
-│  └──────┬───────┘     └──────────────┘     └──────────────┘                   │
-│         │                                                                      │
-│         ▼                                                                      │
-│  ┌──────────────────────────────────────────────────────────────────┐          │
-│  │                    IsaacLab Environment                         │          │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │          │
-│  │  │ Scene Mgr   │  │ Obs Manager │  │    Action Manager      │  │          │
-│  │  │ (terrain,   │  │ (policy,    │  │    (joint torque,      │  │          │
-│  │  │  lights)    │  │  history)   │  │     position target)  │  │          │
-│  │  └─────────────┘  └─────────────┘  └─────────────────────────┘  │          │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │          │
-│  │  │ Reward Mgr  │  │Term Manager │  │   Command Manager      │  │          │
-│  │  │ (tracking,  │  │ (fall, time │  │   (velocity cmd,       │  │          │
-│  │  │  stability) │  │  out, etc)  │  │    yaw rate, height)  │  │          │
-│  │  └─────────────┘  └─────────────┘  └─────────────────────────┘  │          │
-│  └──────────────────────────────────────────────────────────────────┘          │
-│                                    │                                            │
-│                                    ▼                                            │
-│  ┌──────────────────────────────────────────────────────────────────┐          │
-│  │              CONTROLLER STACK (Simulator-Agnostic)               │          │
-│  │                                                                   │          │
-│  │  ┌────────────────────────────────────────────────────────────┐  │          │
-│  │  │              ControllerCore (Orchestrator)                 │  │          │
-│  │  │  - GaitScheduler → contact_schedule (B×4×H)               │  │          │
-│  │  │  - TrajectoryGenerator → x_ref (B×12×(H+1))               │  │          │
-│  │  │  - Solver orchestration (CPU/GPU)                          │  │          │
-│  │  └────────────────────────────────────────────────────────────┘  │          │
-│  │                              │                                    │          │
-│  │         ┌────────────────────┼────────────────────┐                │          │
-│  │         ▼                    ▼                    ▼                │          │
-│  │  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐       │          │
-│  │  │ ConvexMPC   │     │     WBC     │     │   Swing     │       │          │
-│  │  │ (QP Solver) │     │ (J^T×F +    │     │  Trajectory │       │          │
-│  │  │ Centroidal  │     │  gravity)   │     │   (Bezier)  │       │          │
-│  │  │ Dynamics    │     │             │     │             │       │          │
-│  │  └─────────────┘     └─────────────┘     └─────────────┘       │          │
-│  │                                                                   │          │
-│  └──────────────────────────────────────────────────────────────────┘          │
-│                                    │                                            │
-│                                    ▼                                            │
-│  ┌──────────────────────────────────────────────────────────────────┐          │
-│  │                   Robot Interface (ABC)                          │          │
-│  │  ┌─────────────────────────────────────────────────────────────┐ │          │
-│  │  │ get_base_pose() → (pos, quat)        get_joint_state()    │ │          │
-│  │  │ get_base_velocity() → (lin, ang)    get_foot_positions()  │ │          │
-│  │  │ get_foot_jacobian() → (3, nv)       get_foot_velocity()   │ │          │
-│  │  │ get_gravity_compensation() → (3,)   set_torques()         │ │          │
-│  │  └─────────────────────────────────────────────────────────────┘ │          │
-│  └──────────────────────────────────────────────────────────────────┘          │
-│                                    │                                            │
-│         ┌──────────────────────────┼──────────────────────────┐                │
-│         ▼                          ▼                          ▼                │
-│  ┌─────────────┐            ┌─────────────┐            ┌─────────────┐        │
-│  │ MujocoRobot │            │ IsaacRobot  │            │ PyBullet    │        │
-│  │ (current)   │            │ (to build)  │            │ (optional)  │        │
-│  └─────────────┘            └─────────────┘            └─────────────┘        │
-│                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
-
-Legend: B = batch size (num_envs), H = MPC horizon steps
+┌─────────────────────────────────────────────────────────────────┐
+│                    CONTROLLER LOOP (30-100 Hz)                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────┐                                               │
+│  │   Gait       │  Phase-based contact scheduling              │
+│  │ Scheduler    │  → Binary contact schedule [4 legs × H]      │
+│  └──────┬───────┘                                              │
+│         │                                                       │
+│         ▼                                                       │
+│  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐   │
+│  │ Trajectory   │     │   Convex     │     │  Reference   │   │
+│  │ Generator    │────▶│     MPC      │────▶│  Forces (12) │   │
+│  │ (x_ref)      │     │   (QP Solve) │     │              │   │
+│  └──────────────┘     └──────────────┘     └──────┬───────┘   │
+│                                                   │             │
+└───────────────────────────────────────────────────┼─────────────┘
+                                                    │
+┌───────────────────────────────────────────────────┼─────────────┐
+│                    LOW-LEVEL (1 kHz)              ▼             │
+│                                                                  │
+│  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐   │
+│  │     WBC      │     │    Swing     │     │    Torque    │   │
+│  │ (J^T × F +   │────▶│   Leg PD     │────▶│   Commands   │   │
+│  │  gravity)    │     │  + Bezier    │     │   (12 joints)│   │
+│  └──────────────┘     └──────────────┘     └──────────────┘   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
+
+**Components:**
+- **Gait Scheduler:** Phase-based (trot, bound, pace, crawl)
+- **Trajectory Generator:** Reference state for MPC horizon (position, velocity)
+- **Convex MPC:** Centroidal dynamics QP with friction cone constraints
+- **WBC:** Jacobian-transpose + gravity compensation
+- **Swing Controller:** Cartesian PD + cubic Bezier trajectories
+
+**Data Flow:**
+1. Gait scheduler outputs contact schedule [4 × H]
+2. Trajectory generator creates reference [12 × (H+1)]
+3. MPC solves QP → contact forces [12]
+4. WBC converts forces → joint torques
+5. Swing leg PD adds swing leg torques
+6. Combined torques → robot actuators
+
+---
+
+### Pattern 2: Cascaded Fidelity MPC (Cafe-MPC)
+
+Emerging architecture from CMU (2024) that reduces tuning burden:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Cafe-MPC Architecture                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │              Fidelity Level 1: Centroidal (Fast)         │  │
+│  │         Low-dimensional QP (~30 variables)                │  │
+│  └─────────────────────────┬────────────────────────────────┘  │
+│                            │                                     │
+│                            ▼                                     │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │              Fidelity Level 2: Full WBC (Accurate)       │  │
+│  │         Higher-dimensional QP (~50+ variables)          │  │
+│  └─────────────────────────┬────────────────────────────────┘  │
+│                            │                                     │
+│                            ▼                                     │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │         Automatic Weight Tuning (No Manual Tuning)        │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key Innovation:** Automatic weight balancing between fidelity levels eliminates manual tuning.
+
+**Reference:** Cafe-MPC (arXiv:2403.03995, 2024)
+
+---
+
+### Pattern 3: Nonlinear MPC Architecture
+
+For high-speed or terrain-adaptive locomotion:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Nonlinear MPC Architecture                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────┐                                               │
+│  │   acados /   │  Nonlinear optimal control                   │
+│  │   CasADi     │  - Full robot dynamics                        │
+│  │   Solver     │  - Contact dynamics                            │
+│  └──────┬───────┘  - SQP or Gauss-Newton iterations             │
+│         │                                                       │
+│         ▼                                                       │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │              Solution: Full Trajectory                    │  │
+│  │         [joint positions, velocities, torques]            │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Characteristics:**
+- Full nonlinear dynamics (no linearization)
+- Longer solve time (20-50ms vs 5-10ms for linear)
+- Better accuracy at high speeds
+- Used by ETH Zurich for ANYmal perceptive locomotion
+
+---
 
 ## Component Boundaries
 
-### Layer 1: Simulation Backend (IsaacLab)
-
-| Component | Responsibility | Communicates With |
-|-----------|---------------|-------------------|
-| `IsaacEnv` | GPU-parallel physics simulation, handles thousands of envs | Scene Manager, Controller Stack |
-| `SceneManager` | Terrain spawning, lighting, robot asset loading | IsaacEnv, Observation Manager |
-| `SimWriter` | Batched tensor writes (torques → GPU) | Controller Stack |
-
-**Boundary Contract:** IsaacLab provides batched state tensors (`[B, state_dim]`) and accepts batched action tensors. The controller stack processes these as batched operations.
-
-### Layer 2: IsaacLab Managers (Task Specification)
-
-| Component | Responsibility | Communicates With |
-|-----------|---------------|-------------------|
-| `ObservationManager` | Constructs policy observations from state | IsaacEnv → RL Agent |
-| `RewardManager` | Computes scalar rewards per environment | IsaacEnv, Controller Stack |
-| `TerminationManager` | Determines episode end conditions | IsaacEnv |
-| `CommandManager` | Generates velocity/yaw commands (goal-conditioned) | IsaacEnv |
-| `EventManager` | Handles reset logic, domain randomization | IsaacEnv |
-
-**Key Insight:** IsaacLab uses a **manager-based configuration** pattern where the environment is defined declaratively via dataclasses (`ManagerBasedRLEnvCfg`). This differs from the current project's imperative style but can coexist.
-
-### Layer 3: Controller Stack (Simulator-Agnostic)
+### Layer 1: Gait & Reference
 
 | Component | Responsibility | Input | Output |
 |-----------|---------------|-------|--------|
-| `ControllerCore` | Orchestrates gait→MPC→WBC→swing at control freq | State, Command, contact_schedule | torques [B, 12] |
-| `GaitScheduler` | Phase-based contact scheduling | gait_params, time | contact_schedule [B, 4, H] |
-| `TrajectoryGenerator` | Reference state for MPC horizon | state, command, contacts | x_ref [B, 12, H+1] |
-| `ConvexMPC` | Centroidal dynamics QP | state, x_ref, contacts, feet | forces [B, 12] |
-| `WBC` | Jacobian-transpose whole-body control | forces, state, jacobians | stance_torques [B, 12] |
-| `FootSwingTraj` | Cubic Bezier swing trajectory | swing_params, phase | swing_targets [B, 4, 3] |
+| GaitScheduler | Phase-based contact scheduling | time, gait params | contact_schedule [4 × H] |
+| TrajectoryGenerator | Reference trajectory | state, command | x_ref [12 × (H+1)] |
+| FootPlacement (Raibert) | Heuristic foot targets | velocity, yaw rate | target_positions |
 
-**Critical:** All controller components must operate on batched tensors `[B, ...]` for GPU parallelism.
+### Layer 2: Optimization
 
-### Layer 4: Robot Interface (Abstract Boundary)
+| Component | Responsibility | Input | Output |
+|-----------|---------------|-------|--------|
+| ConvexMPC | Centroidal dynamics QP | state, x_ref, contacts | forces [12] |
+| QPSolver | Generic QP interface | H, f, A, b | solution |
+| WBC | Whole-body control | forces, jacobians | torques [12] |
 
-| Method | Purpose | Tensor Shape |
-|--------|---------|--------------|
-| `get_base_pose()` | Base position and orientation | [B, 7] (pos + quat) |
-| `get_base_velocity()` | Base linear/angular velocity | [B, 6] |
-| `get_joint_state()` | Joint positions and velocities | [B, 12] each |
-| `get_foot_positions_world()` | Foot positions in world frame | [B, 4, 3] |
-| `get_leg_jacobian()` | Leg Jacobian matrices | [B, 4, 3, 3] |
-| `set_torques()` | Apply joint torques | [B, 12] |
+### Layer 3: Execution
 
-**This layer already exists** in the project (`core/robot.py`) — it needs a batched tensor variant for IsaacLab.
+| Component | Responsibility | Input | Output |
+|-----------|---------------|-------|--------|
+| SwingTrajectory | Bezier swing path | swing_targets, phase | joint_targets |
+| SwingController | Cartesian PD | foot_target, foot_pos | swing_torques |
+| TorqueBlender | Merge stance/swing | tau_stance, tau_swing | tau_final |
 
-## Data Flow
+---
 
-### Training Data Flow (Batched)
+## Key Architectural Decisions
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           STEP k: ENVIRONMENT LOOP                         │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  1. ISAACLAB SIMULATOR                                                     │
-│     state_k [B, state_dim] ──────────────────────────────────────────┐     │
-│                                                                        │     │
-│  2. OBSERVATION CONSTRUCTION (ObservationManager)                     │     │
-│     state_k ──▶ obs_k [B, obs_dim] ──▶ RL Agent                      │     │
-│                                                                        │     │
-│  3. RL AGENT FORWARD PASS                                               │     │
-│     obs_k ──▶ action_k [B, action_dim] ──▶ either:                    │     │
-│                      │                                                   │     │
-│                      ├── Option A: Direct torque commands [B, 12]      │     │
-│                      │        (simpler, used in this project)          │     │
-│                      │                                                   │     │
-│                      └── Option B: MPC weight parameters [B, mpc_dim]  │     │
-│                               (for learned MPC, e.g., rl-mpc-locomotion)│     │
-│                                                                        │     │
-│  4. CONTROLLER STACK (per environment)                                 │     │
-│     action_k + state_k ──▶ ControllerCore ──▶ torques [B, 12]        │     │
-│        │                                                                  │     │
-│        ├── GaitScheduler: time_k ──▶ contacts [B, 4, H]              │     │
-│        ├── TrajectoryGenerator: state + cmd ──▶ x_ref [B, 12, H+1]   │     │
-│        ├── ConvexMPC: QP solve ──▶ forces [B, 12]                    │     │
-│        ├── WBC: forces + jacobians ──▶ stance_tau [B, 12]            │     │
-│        └── Swing: swing_targets + PD ──▶ swing_tau [B, 12]           │     │
-│                                                                        │     │
-│  5. TORQUE APPLICATION                                                  │     │
-│     torques [B, 12] ──▶ IsaacEnv.set_dof_actions() ──▶ physics step  │     │
-│                                                                        │     │
-│  6. REWARD COMPUTATION (RewardManager)                                  │     │
-│     state_k+1 + torques ──▶ rewards [B, 1]                            │     │
-│                                                                        │     │
-│  7. TERMINATION CHECK (TerminationManager)                             │     │
-│     state_k+1 ──▶ terminated [B], truncated [B]                      │     │
-│                                                                        │     │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+### QP Formulation Variants
 
-### Key Data Transformation Points
+| Variant | Variables | Constraints | Solvers |
+|---------|-----------|-------------|---------|
+| **Force-based (standard)** | 3 forces × 4 legs = 12 | Friction cones, force limits | OSQP, ProxQP, qpOASES |
+| **Force + acceleration** | 12 + 6 acceleration | Plus CoP constraints | More complex |
+| **Unified leg model** | Combine stance/swing | Phase-dependent | Research-level |
 
-| Point | Transformation | Batch-Aware? |
-|-------|---------------|--------------|
-| State extraction | Simulator state → Robot ABC interface | Yes — `[B, ...]` |
-| Gait scheduling | Scalar time → binary contact schedule | Yes — broadcasts to `[B, ...]` |
-| MPC solve | Single QP → batched QP (one per env) | **Requires implementation** |
-| WBC | Single Jacobian → batched Jacobians `[B, 4, 3, 3]` | Yes |
-| Torque application | `[B, 12]` → IsaacLab action buffer | Yes |
+**Current project:** Force-based with friction cone constraints.
 
-## Patterns to Follow
-
-### Pattern 1: Batched QP Solver for GPU MPC
-
-For true GPU parallelism in MPC, the QP solve must operate on batched matrices. Two approaches:
-
-**Approach A: OSQP/CLARABEL with Batched API**
-```python
-# Each environment solves its own QP, but matrices are stacked
-H_batch = torch.stack([H_0, H_1, ..., H_B-1], dim=0)  # [B, 12+H*12, 12+H*12]
-f_batch = torch.stack([f_0, f_1, ..., f_B-1], dim=0)  # [B, 12+H*12]
-
-# OSQP has limited batch support; CLARABEL is better
-import clarabel
-solver = clarabel.DefaultSolver(...)  # May need per-env instantiation
-solutions = [solver.solve(H_i, f_i) for i in range(B)]  # Sequential :(
-```
-
-**Approach B: Differentiable MPC Layer (Recommended for RL-MPC)**
-```python
-# mpc.pytorch provides batched iLQR/DDP on GPU
-from mpc import mpc
-
-x_lqr, u_lqr, objs = mpc.MPC(
-    n_state=12,
-    n_ctrl=12,
-    T=horizon,
-    u_lower=force_bounds,
-    u_upper=force_bounds,
-    lqr_iter=10,
-    batch_size=num_envs,
-)(x_init_batch, quad_cost, lin_dynamics)
-```
-
-**Recommendation:** For pure MPC-WBC (not learning MPC weights), use **Approach A** with CLARABEL or custom CUDA kernels. For RL-augmented MPC (where RL predicts MPC parameters), use **Approach B** (mpc.pytorch).
-
-### Pattern 2: IsaacLab Environment Integration
-
-IsaacLab supports two workflows:
-
-| Workflow | Use Case | Complexity |
-|----------|----------|------------|
-| **Manager-Based** | Standard RL tasks, reward shaping | Low — declarative config |
-| **Direct Workflow** | Custom controllers, tight simulation coupling | Medium — imperative Python |
-
-**For this project:** Use **Direct Workflow** because:
-1. The existing controller stack is mature and simulator-agnostic
-2. Manager-based would require reimplementing controller logic in IsaacLab's manager patterns
-3. Direct workflow allows direct `step()` calls into the controller stack
-
-```python
-# Direct Workflow Pattern (recommended)
-class QuadrupedRlEnv:
-    def __init__(self, cfg):
-        self.robot = IsaacRobot(cfg)  # implements Robot ABC
-        self.controller = ControllerCore(cfg.controller)
-        
-    def step(self, action):
-        # action can be: direct torques OR MPC weight predictions
-        self.controller.update(self.robot.get_state(), action)
-        torques = self.controller.compute_torques()
-        self.robot.set_torques(torques)
-        self.sim.step()
-        
-        return obs, reward, terminated, info
-```
-
-### Pattern 3: Hybrid RL-MPC Architecture
-
-For advanced use cases (MPC-augmented RL), the pattern from `rl-mpc-locomotion`:
+### Solver Integration Patterns
 
 ```
-┌─────────────────┐     ┌─────────────────┐
-│   RL Policy     │────▶│  MPC Weight     │
-│  (neural net)   │     │  Predictor      │
-└─────────────────┘     └────────┬────────┘
-                                  │
-                                  ▼
-                    ┌─────────────────────────┐
-                    │   Convex MPC Controller │
-                    │  (uses predicted params)│
-                    └────────────┬────────────┘
-                                 │
-                                 ▼
-                    ┌─────────────────────────┐
-                    │   Whole-Body Control    │
-                    └─────────────────────────┘
+Pattern A: Embedded Solver (OSQP, ProxQP)
+    MPC Controller → QP matrices → Solver → Forces
+    
+Pattern B: Code Generation (acados)
+    MPC Controller → acados OCP → C code generation → Compiled solver
+    
+Pattern C: GPU Batched (ReLU-QP)
+    Batch states → GPU QP solve → Batch forces (parallel)
 ```
 
-This allows RL to learn what MPC parameters work best for different situations, while MPC handles real-time control.
+---
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Per-Environment Python Loops in Controller
+### Anti-Pattern 1: Per-Timestep Re-initialization
 
-**What:** Iterating over batch dimension in Python
-```python
-# BAD: Sequential loop loses GPU parallelism
-for i in range(num_envs):
-    mpc_result = solve_mpc(state[i], ...)
-    torques[i] = mpc_result.torques
-```
-
-**Instead:** Vectorized tensor operations
-```python
-# GOOD: Full GPU parallelism
-H_batch = self._build_QP_matrices(state_batch)  # [B, ...]
-forces_batch = self.solver.solve_batch(H_batch)  # [B, 12]
-```
-
-### Anti-Pattern 2: Breaking the Robot ABC for IsaacLab
-
-**What:** Adding IsaacLab-specific methods to the controller
-```python
-# BAD: Controller knows about IsaacLab tensors
-class ConvexMPC:
-    def solve(self, env):
-        # directly accesses env._physics_view
-```
-
-**Instead:** Keep the Robot ABC pure, implement batched variant
-```python
-# GOOD: Batched robot interface
-class IsaacRobot(Robot):
-    def get_foot_positions_world(self) -> torch.Tensor:  # [B, 4, 3]
-        return self._foot_pos_buffer  # pre-allocated GPU tensor
-```
-
-### Anti-Pattern 3: Synchronous GPU-CPU Data Transfer Each Control Step
-
-**What:** Moving tensors CPU→GPU→CPU each frame
+**Bad:** Create new solver object each control cycle
 ```python
 # BAD: Overhead kills performance
-for env in envs:
-    state = env.get_state().cpu().numpy()  # CPU transfer
-    result = mpc.solve(state)  # CPU solve
-    torques = torch.tensor(result.torques).cuda()  # GPU transfer
+for step in control_loop:
+    solver = OSQP()
+    solver.setup(Q, A, ...)
+    result = solver.solve()
 ```
 
-**Instead:** Keep all computation on GPU
+**Good:** Warm-start with previous solution
 ```python
-# GOOD: Fully GPU-resident
-state_batch = env.get_state()  # [B, ...] already on GPU
-forces_batch = mpc_batch(state_batch)  # GPU solve
-env.set_actions(forces_batch)  # direct GPU write
+# GOOD: Reuse solver, warm-start
+solver = OSQP()
+solver.setup(Q, A, ...)
+for step in control_loop:
+    solver.update(...)
+    result = solver.solve(warm_start=prev_solution)
 ```
 
-## Scalability Considerations
+### Anti-Pattern 2: Hardcoded Constraint Bounds
 
-| Concern | 256 envs | 4096 envs | 16384 envs |
-|---------|----------|-----------|------------|
-| **Simulation** | IsaacLab native | IsaacLab native | May need GPU memory tuning |
-| **QP Solve (CPU)** | ~5ms/solve × 256 | Timeout likely | Not viable |
-| **QP Solve (GPU batched)** | ~0.5ms/solve | ~2ms/solve | ~8ms/solve |
-| **WBC Compute** | ~0.1ms | ~0.5ms | ~2ms |
-| **Total control loop** | <10ms | <15ms | <25ms |
+**Bad:** Fixed friction coefficient, force limits
+```python
+# BAD: No adaptability
+mu = 0.6  # hardcoded
+max_force = 180  # hardcoded
+```
 
-**Key insight:** The bottleneck shifts from simulation (IsaacLab handles efficiently) to the QP solve. GPU-batched solvers are essential for 4096+ environments.
+**Good:** Configurable with safety margins
+```python
+# GOOD: Configurable, with margins
+mu = config.friction_coefficient  # configurable
+max_force = config.max_force * 0.8  # 20% margin
+```
 
-## Build Order Recommendations
+### Anti-Pattern 3: Mixing Frames Incorrectly
 
-Based on dependencies and testability:
+**Bad:** Forces in body frame, Jacobian in world frame
+```python
+# BAD: Frame mismatch
+forces_body = mpc_output()
+torques = J_world.T @ forces_body  # WRONG
+```
 
-### Phase 1: IsaacLab Integration (Foundation)
-1. **IsaacRobot implementation** — implements Robot ABC for IsaacLab
-   - Batch state extraction from IsaacLab tensors
-   - Batch Jacobian computation (analytical URDF or finite-diff)
-   - Test: Single-env stepping matches MuJoCo
-   
-2. **Batched WBC** — extend existing WBC to batched operation
-   - Input: `[B, 4, 3, 3]` Jacobians, `[B, 12]` forces
-   - Output: `[B, 12]` torques
-   - Test: Batched WBC produces same results as single-env
+**Good:** Consistent frame transformations
+```python
+# GOOD: Explicit frame handling
+forces_world = R_body_to_world @ forces_body
+torques = J_world.T @ forces_world
+```
 
-### Phase 2: Batched MPC Solver
-3. **GPU-accelerated QP** — replace CVXPY with batched solver
-   - Option A: Custom CUDA QP kernel (OSQP-style)
-   - Option B: CLARABEL with batched setup
-   - Option C: mpc.pytorch iLQR for differentiable use
-   
-4. **Batched ConvexMPC** — wrap QP solver with MPC formulation
-   - Input: `[B, 12]` state, `[B, 12, H+1]` ref trajectory
-   - Output: `[B, 12]` optimal forces
-   - Test: Batch solve ≈ N single solves
+---
 
-### Phase 3: RL Training Integration
-5. **Direct Workflow Environment** — create IsaacLab env that uses controller
-   - Integrates with RL libraries (RSL-RL, stable-baselines3)
-   - Handles reset, reward computation, termination
-   
-6. **Reward shaping** — addIsaacLab reward terms
-   - Tracking reward, stability penalty, effort penalty
-   - Curriculum learning support
+## Scalability Characteristics
 
-### Phase 4: Advanced (Optional)
-7. **Differentiable MPC** — integrate mpc.pytorch for RL-MPC
-8. **Hybrid RL-MPC** — RL predicts MPC parameters
+| Configuration | MPC Solve Time | WBC Time | Total Latency |
+|---------------|----------------|----------|---------------|
+| Single QP (CPU) | 5-10ms | <1ms | ~10ms (100 Hz) |
+| Single QP (OSQP optimized) | 2-5ms | <1ms | ~5ms (200 Hz) |
+| Batched 1000 (GPU) | 2-5ms | <1ms | ~5ms |
+| Batched 10000 (GPU) | 10-20ms | 2-5ms | ~25ms |
+
+---
+
+## Sources
+
+### Architecture Papers
+
+- Cafe-MPC: Cascaded-Fidelity MPC (arXiv:2403.03995, 2024)
+- MIT Cheetah MPC (Di Carlo et al., 2018) — Foundational
+- ETH Perceptive Locomotion (2022-2024)
+- Inverse-Dynamics MPC via Nullspace Resolution (Mastalli et al., 2022)
+
+### Implementation References
+
+- ShuoYangRobotics/A1-QP-MPC-Controller — Production architecture
+- iit-DLSLab/Quadruped-PyMPC — Python architecture
+- Unitree official implementations
+
+---
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| IsaacLab architecture | HIGH | Official documentation and source patterns |
-| Batched MPC patterns | MEDIUM | mpc.pytorch well-documented; GATO is new (2025) |
-| Scalability estimates | MEDIUM | Based on IsaacLab benchmarks; actual depends on implementation |
-| Build order | HIGH | Standard embedded systems dependencies |
-
-## Sources
-
-- Isaac Lab Documentation — Manager-Based and Direct Workflow environments (2026-03)
-- NVIDIA Isaac Lab arXiv paper (arXiv:2511.04831, 2025-11)
-- mpc.pytorch — Differentiable MPC solver (locuslab.github.io)
-- GATO — GPU-Accelerated Batched Trajectory Optimization (arXiv:2510.07625, 2025-10)
-- rl-mpc-locomotion — RL-MPC integration pattern (GitHub silvery107, 931 stars)
-- IsaacLab-Quadruped-Tasks — Community quadruped extensions (GitHub felipemohr)
+| Two-layer architecture | HIGH | Standard across labs |
+| Cafe-MPC pattern | HIGH | Documented in 2024 paper |
+| Nonlinear MPC | MEDIUM | Varied implementations |
+| Scalability data | MEDIUM | Varies by hardware |

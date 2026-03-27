@@ -2,85 +2,58 @@
 
 MIT Cheetah-style convex MPC controller for a Unitree Go2 quadruped robot.
 
-## What This Is
+## Current State (v1.1)
 
-A modular, simulator-agnostic controller stack for quadrupedal locomotion. The system implements centroidal dynamics MPC with whole-body control (Jacobian transpose), Raibert heuristic foot placement, cubic Bezier swing trajectories, and phase-based gait scheduling.
+A working MPC-WBC controller stack implementing MIT Cheetah-style convex MPC for quadrupedal locomotion.
 
-## Milestone v1.0 (Completed)
+### Completed Features
+- Centroidal dynamics MPC (100 Hz)
+- Whole-body control via Jacobian transpose (500 Hz)
+- Analytical kinematics (no simulator deps)
+- Raibert foot placement + Bezier swing trajectories
+- Phase-based gait scheduler (trot/bound/pace)
+- Simulator-agnostic Robot ABC (MuJoCo, IsaacLab)
+- Kalman filter state estimation
+- Balance controller for push recovery
+- GPU batched MPC (requires PyTorch)
 
-Implemented core MPC-WBC stack:
-- ✓ Centroidal dynamics MPC with convex QP
-- ✓ Whole-body control via Jacobian transpose
-- ✓ Raibert foot placement
-- ✓ Cubic Bezier swing trajectories
-- ✓ Phase-based gait scheduler
-- ✓ Simulator-agnostic Robot ABC
-- ✓ MuJoCo + IsaacLab backends
-- ✓ Analytical kinematics
-- ✓ GPU batched MPC (requires PyTorch)
-
-## Milestone v1.1: MIT Cheetah Parity
-
-### Gap Analysis
-
-| Aspect | MIT Cheetah | QuadrupedMPC | Priority |
-|--------|-------------|--------------|----------|
-| MPC Frequency | 400 Hz | 33 Hz | **HIGH** |
-| WBC Frequency | 500 Hz | 100 Hz | HIGH |
-| State Estimation | Linear Kalman Filter | Simple integration | HIGH |
-| QP Solver | qpOASES | CLARABEL | MEDIUM |
-| Balance Controller | Yes | No | HIGH |
-| Terrain Adaptation | 30° slope | No | MEDIUM |
-| Stair Climbing | 9cm | No | MEDIUM |
-
-### Key References
-- Di Carlo et al., IROS 2018 — Original convex MPC paper
-- Bledt et al., IROS 2018 — MIT Cheetah 3 design paper
-- [A1-QP-MPC-Controller](https://github.com/ShuoYangRobotics/A1-QP-MPC-Controller) — 812 stars, C++ implementation
-- [MIT-Cheetah-Note](https://github.com/Technician13/MIT-Cheetah-Note) — Source code analysis
-
-## Core Value
-
-A working MPC-WBC controller stack for quadruped robots that can be extended to different simulators and used as a foundation for MPC-augmented RL research.
-
-## Architecture
-
+### Architecture
 ```
 go2_mpc/
-├── core/              # Robot abstraction (Robot ABC)
-├── controller/        # MPC, WBC, gait (simulator-agnostic)
-├── kinematics/        # Analytical FK/Jacobians
-└── config/           # Parameters
+├── core/           # Robot abstraction (Robot ABC)
+├── controller/     # MPC, WBC, gait, balance (simulator-agnostic)
+├── kinematics/     # Analytical FK/Jacobians
+└── config/         # Parameters
 ```
 
-## Context
+---
 
-- **Robot**: Unitree Go2 (15.2 kg)
-- **Backend**: MuJoCo, IsaacLab
-- **Stack**: Python, NumPy, PyTorch (optional)
+## v1.1 Milestone Summary
 
-## Requirements
+**Completed:** 2026-03-27
 
-### v1.1 Active (MIT Cheetah Parity)
+| Phase | Feature |
+|-------|---------|
+| 4 | State Estimation (Kalman filter) |
+| 5 | Controller Frequency (100/500 Hz) + Tuning |
+| 6 | Balance Controller (push recovery) |
 
-- [ ] Increase MPC frequency to 100+ Hz
-- [ ] Increase WBC frequency to 500 Hz
-- [ ] Implement Linear Kalman Filter for state estimation
-- [ ] Add Balance Controller for push recovery
-- [ ] Tune parameters for Go2
+---
 
-### Out of Scope
+## Next Goals
 
-- [Nonlinear MPC] — linear sufficient for current scope
-- [Hardware deployment] — simulation only
+1. **Test performance** at increased frequencies (100/500 Hz)
+2. **C++ porting** if Python is too slow (swap to qpOASES)
+3. **Terrain adaptation** (stretch goal)
+4. **Hardware deployment** (stretch goal)
 
-## Key Decisions
+---
 
-| Decision | Rationale | Outcome |
-|----------|-----------|---------|
-| CLARABEL solver | Sufficient for 33 Hz | Working |
-| Jacobian transpose WBC | Simpler than full OBC | Working |
-| Python implementation | Prototyping | Consider C++ for production |
+## Key References
+
+- Di Carlo et al., IROS 2018 — Convex MPC
+- Bledt et al., IROS 2018 — MIT Cheetah 3 design
+- [A1-QP-MPC-Controller](https://github.com/ShuoYangRobotics/A1-QP-MPC-Controller) — Reference implementation
 
 ---
 
