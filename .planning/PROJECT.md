@@ -4,19 +4,18 @@ MIT Cheetah-style convex MPC controller for a Unitree Go2 quadruped robot.
 
 ## Current State (v1.2)
 
-A production-quality MPC-WBC controller stack with optimized QP solver.
+Production-quality MPC-WBC controller with optimized QP solver.
 
 ### Completed Features
-- Centroidal dynamics MPC (100 Hz)
+- Centroidal dynamics MPC (100 Hz, quadprog solver)
 - Whole-body control via Jacobian transpose (500 Hz)
 - Analytical kinematics (no simulator deps)
-- Raibert foot placement + Bezier swing trajectories
 - Phase-based gait scheduler (trot/bound/pace)
 - Simulator-agnostic Robot ABC (MuJoCo, IsaacLab)
 - Kalman filter state estimation
 - Balance controller for push recovery
 - GPU batched MPC (requires PyTorch)
-- **Optimized QP solver (quadprog — 20x faster than CLARABEL)**
+- Optimized QP solver (quadprog — 20x faster)
 
 ### Architecture
 ```
@@ -29,23 +28,15 @@ go2_mpc/
 
 ---
 
-## v1.2 Milestone Summary
+## Milestone v1.3: Terrain Adaptation
 
-**Completed:** 2026-03-27
+**Goal:** Walk on rough terrain and stairs (up to 20° slopes, 5cm stairs).
 
-| Phase | Feature |
-|-------|---------|
-| 7 | Unified QP solver backend |
-| 8 | Benchmark suite |
-| 9 | Solver selection (quadprog default) |
-
----
-
-## Next Goals
-
-1. **Terrain adaptation** — Rough terrain + stairs
-2. **Nonlinear MPC** — acados for agile motions
-3. **Hardware deployment** — C++ port if needed
+### Requirements
+- TERR-01: Rough terrain MuJoCo scene
+- TERR-02: Contact-embedded height estimation
+- TERR-03: Slope adaptation for MPC
+- TERR-04: Stair climbing capability
 
 ---
 
