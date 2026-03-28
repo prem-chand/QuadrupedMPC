@@ -245,11 +245,10 @@ def main():
                     # Print status every 500 steps
                     if controller_state.step_counter % 500 == 0:
                         base_pos, _ = robot.get_base_pose()
-                        base_rpy = robot.get_base_rpy()
                         swing_active = diag['swing_active']
                         print(f"step={controller_state.step_counter} t={sim_time:.2f}s "
                               f"pos=({base_pos[0]:.3f}, {base_pos[1]:.3f}, {base_pos[2]:.3f}) "
-                              f"rpy=({base_rpy[0]:.3f}, {base_rpy[1]:.3f}, {base_rpy[2]:.3f}) "
+                              f"rpy=({np.degrees(state.base.roll):.1f}, {np.degrees(state.base.pitch):.1f}, {np.degrees(state.base.yaw):.1f})deg "
                               f"cmd=({command.v_cmd_global[0]:.2f}, {command.v_cmd_global[1]:.2f}) "
                               f"swing={swing_active}")
 
