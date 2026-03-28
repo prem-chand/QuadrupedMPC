@@ -232,7 +232,7 @@ def main():
                         t=sim_time,
                         step=controller_state.step_counter,
                         robot=robot,
-                        estimator=estimator,
+                        state=state,
                         command=command,
                         contact_schedule=contact_schedule,
                         gait_phase=gait_phase,

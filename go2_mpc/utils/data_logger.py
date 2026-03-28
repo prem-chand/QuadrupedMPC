@@ -164,7 +164,7 @@ def create_log_entry(
     t: float,
     step: int,
     robot,
-    estimator,
+    state,
     command,
     contact_schedule,
     gait_phase,
@@ -175,7 +175,7 @@ def create_log_entry(
     """Create a LogEntry from current state."""
     
     base_pos, base_quat = robot.get_base_pose()
-    base_rpy = robot.get_base_rpy()
+    base_rpy = np.array([state.base.roll, state.base.pitch, state.base.yaw])
     base_lin_vel, base_ang_vel = robot.get_base_velocity()
     
     joint_q, joint_qd = robot.get_joint_state()
