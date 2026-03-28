@@ -1,0 +1,55 @@
+<mujoco model="go2 stairs">
+  <include file="go2.xml"/>
+
+  <statistic center="0 0 0.3" extent="3"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="-130" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+      markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+    <material name="stair" rgba="0.5 0.5 0.5 1"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+    
+    <!-- Base floor -->
+    <geom name="floor" pos="0 0 -0.05" size="5 5 0.05" type="box" material="groundplane"/>
+    
+    <!-- Stairs: 5cm rise, 25cm depth, 8 steps = 40cm total height -->
+    <!-- Step 1 -->
+    <geom name="step1" pos="2.0 0 0.025" size="0.125 0.8 0.025" type="box" material="stair" condim="3" friction="0.6 0.02 0.01"/>
+    
+    <!-- Step 2 -->
+    <geom name="step2" pos="2.25 0 0.075" size="0.125 0.8 0.075" type="box" material="stair" condim="3" friction="0.6 0.02 0.01"/>
+    
+    <!-- Step 3 -->
+    <geom name="step3" pos="2.5 0 0.125" size="0.125 0.8 0.125" type="box" material="stair" condim="3" friction="0.6 0.02 0.01"/>
+    
+    <!-- Step 4 -->
+    <geom name="step4" pos="2.75 0 0.175" size="0.125 0.8 0.175" type="box" material="stair" condim="3" friction="0.6 0.02 0.01"/>
+    
+    <!-- Step 5 -->
+    <geom name="step5" pos="3.0 0 0.225" size="0.125 0.8 0.225" type="box" material="stair" condim="3" friction="0.6 0.02 0.01"/>
+    
+    <!-- Step 6 -->
+    <geom name="step6" pos="3.25 0 0.275" size="0.125 0.8 0.275" type="box" material="stair" condim="3" friction="0.6 0.02 0.01"/>
+    
+    <!-- Step 7 -->
+    <geom name="step7" pos="3.5 0 0.325" size="0.125 0.8 0.325" type="box" material="stair" condim="3" friction="0.6 0.02 0.01"/>
+    
+    <!-- Step 8 (top landing) -->
+    <geom name="step8" pos="3.75 0 0.375" size="0.125 0.8 0.375" type="box" material="stair" condim="3" friction="0.6 0.02 0.01"/>
+    
+    <!-- Top platform -->
+    <geom name="platform" pos="4.25 0 0.4" size="1.0 1.0 0.01" type="box" material="groundplane" condim="3" friction="0.6 0.02 0.01"/>
+    
+  </worldbody>
+</mujoco>

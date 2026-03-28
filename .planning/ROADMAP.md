@@ -6,35 +6,32 @@ MIT Cheetah-style convex MPC controller for Unitree Go2 quadruped robot.
 
 ## Milestones
 
-- [v1.0](./milestones/v1.0-ROADMAP.md) — Core MPC-WBC stack (completed)
-- [v1.1](./milestones/v1.1-ROADMAP.md) — MIT Cheetah parity (completed)
-- [v1.2](./milestones/v1.2-ROADMAP.md) — Solver ablation (in progress)
-- [v1.3](./milestones/v1.3-ROADMAP.md) — Terrain adaptation (planned)
+- [v1.0](./milestones/v1.0-ROADMAP.md) — Core MPC-WBC stack
+- [v1.1](./milestones/v1.1-ROADMAP.md) — MIT Cheetah parity
+- [v1.2](./milestones/v1.2-ROADMAP.md) — Solver ablation (quadprog 20x faster)
+- **v1.3** — Terrain adaptation (in progress)
 
-## v1.2: Solver Ablation
+## v1.3: Terrain Adaptation
 
-### Phase 7: Unified Solver Backend
-**Goal:** Implement qpsolvers backend for OSQP, qpOASES, proxQP
-**Requirements:** SOLVER-01, SOLVER-02
-**Status:** In Progress
-
-### Phase 8: Benchmark Suite
-**Goal:** Benchmark all solvers, document results
-**Requirements:** BENCH-01, BENCH-02
+### Phase 10: Terrain Scene
+**Goal:** Create MuJoCo scenes with rough terrain and stairs.
+**Requirements:** TERR-01, TERR-02, TERR-03
 **Status:** Pending
 
-### Phase 9: Best Solver Selection
-**Goal:** Select and configure best solver
-**Requirements:** SELECT-01
+### Phase 11: Height Estimation
+**Goal:** Contact-embedded height and slope estimation.
+**Requirements:** HEIGHT-01, HEIGHT-02, HEIGHT-03
 **Status:** Pending
 
-## Progress
+### Phase 12: Slope Adaptation
+**Goal:** MPC adapts to terrain slope.
+**Requirements:** SLOPE-01, SLOPE-02, SLOPE-03
+**Status:** Pending
 
-| Phase | Status | Branch |
-|-------|--------|--------|
-| 7. Unified Solver | In Progress | - |
-| 8. Benchmark | Pending | - |
-| 9. Solver Selection | Pending | - |
+### Phase 13: Stair Climbing
+**Goal:** Robot climbs 5cm stairs.
+**Requirements:** STAIR-01, STAIR-02, STAIR-03
+**Status:** Pending
 
 ---
 
