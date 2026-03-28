@@ -217,4 +217,9 @@ class ControllerCore:
 
         np.clip(buffers.tau_final, -self.torque_limit, self.torque_limit, out=buffers.tau_final)
 
-        return buffers.tau_final
+        return buffers.tau_final, {
+            'contact_schedule': buffers.contact_schedule.copy(),
+            'swing_active': controller_state.swing_active.copy(),
+            'current_forces': buffers.current_forces.copy(),
+            'smoothed_forces': buffers.smoothed_forces.copy(),
+        }

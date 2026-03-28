@@ -131,7 +131,7 @@ def default_config() -> SystemConfig:
         ),
         gait=GaitConfig(
             gait_period=0.45,
-            stance_ratio=0.65,
+            stance_ratio=0.80,  # Increased for more stable walking
         ),
         controller=ControllerConfig(
             mpc_decimation=10,      # 100 Hz MPC (sim_dt * 10 = 0.01s)
