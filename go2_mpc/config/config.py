@@ -83,6 +83,18 @@ class BalanceConfig:
 
 
 # ==========================================================
+# Terrain Adaptation
+# ==========================================================
+
+@dataclass
+class TerrainConfig:
+    enabled: bool = False
+    slope_stance_ratio: float = 0.75  # More stance on slopes
+    slope_threshold_deg: float = 10.0  # Activate slope mode above this
+    height_estimate_alpha: float = 0.5  # EMA smoothing
+
+
+# ==========================================================
 # Full System Config
 # ==========================================================
 
@@ -94,6 +106,7 @@ class SystemConfig:
     controller: ControllerConfig
     solver: SolverConfig = None
     balance: BalanceConfig = None
+    terrain: TerrainConfig = None
 
 
 # ==========================================================
@@ -149,5 +162,11 @@ def default_config() -> SystemConfig:
             normal_stance_ratio=0.65,
             recovery_time=0.5,
             enabled=True,
+        ),
+        terrain=TerrainConfig(
+            enabled=True,
+            slope_stance_ratio=0.75,
+            slope_threshold_deg=10.0,
+            height_estimate_alpha=0.5,
         ),
     )
