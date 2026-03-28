@@ -13,25 +13,21 @@ MIT Cheetah-style convex MPC controller for Unitree Go2 quadruped robot.
 
 ## v1.3: Terrain Adaptation
 
-### Phase 10: Terrain Scene
-**Goal:** Create MuJoCo scenes with rough terrain and stairs.
-**Requirements:** TERR-01, TERR-02, TERR-03
-**Status:** Pending
+### Phase 10: Terrain Scene ✓
+**Status:** Complete (PR #3)
+- rough_terrain.xml, stairs.xml
 
-### Phase 11: Height Estimation
-**Goal:** Contact-embedded height and slope estimation.
-**Requirements:** HEIGHT-01, HEIGHT-02, HEIGHT-03
-**Status:** Pending
+### Phase 11: Height Estimation ✓
+**Status:** Complete (PR #3)
+- TerrainEstimator class
 
 ### Phase 12: Slope Adaptation
-**Goal:** MPC adapts to terrain slope.
-**Requirements:** SLOPE-01, SLOPE-02, SLOPE-03
 **Status:** Pending
+**Requirements:** SLOPE-01, SLOPE-02, SLOPE-03
 
 ### Phase 13: Stair Climbing
-**Goal:** Robot climbs 5cm stairs.
-**Requirements:** STAIR-01, STAIR-02, STAIR-03
 **Status:** Pending
+**Requirements:** STAIR-01, STAIR-02, STAIR-03
 
 ---
 
