@@ -57,6 +57,16 @@ class ControllerConfig:
 
 
 # ==========================================================
+# Solver
+# ==========================================================
+
+@dataclass
+class SolverConfig:
+    solver_name: str = 'quadprog'  # quadprog, clarabel, osqp, scs
+    verbose: bool = False
+
+
+# ==========================================================
 # Balance Controller
 # ==========================================================
 
@@ -82,6 +92,7 @@ class SystemConfig:
     mpc: MPCConfig
     gait: GaitConfig
     controller: ControllerConfig
+    solver: SolverConfig = None
     balance: BalanceConfig = None
 
 
@@ -124,6 +135,10 @@ def default_config() -> SystemConfig:
                 [-0.1934,  0.142, 0.0],  # RL
                 [-0.1934, -0.142, 0.0],  # RR
             ]),
+        ),
+        solver=SolverConfig(
+            solver_name='quadprog',
+            verbose=False,
         ),
         balance=BalanceConfig(
             roll_threshold=0.15,
