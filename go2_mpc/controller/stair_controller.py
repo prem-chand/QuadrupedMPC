@@ -23,19 +23,19 @@ class StairController:
         step_depth: float = 0.25,     # 25cm depth
         swing_height: float = 0.15,    # Higher swing for stairs
         swing_duration: float = 0.3,  # Slower swing
+        stair_start: float = 2.0,     # x position where stairs start in scene
     ):
         self.step_height = step_height
         self.step_depth = step_depth
         self.swing_height = swing_height
         self.swing_duration = swing_duration
+        self._stair_start = stair_start
         
         self._in_stair_region = False
 
-    def detect_stairs(self, foot_positions: list[np.ndarray], base_x: float) -> bool:
+    def detect_stairs(self, base_x: float) -> bool:
         """Detect if robot is approaching stairs."""
-        stair_start = 2.0  # x position where stairs start in scene
-        
-        if base_x > stair_start - 0.5 and base_x < stair_start + 3.0:
+        if base_x > self._stair_start - 0.5 and base_x < self._stair_start + 3.0:
             return True
         return False
 
@@ -56,6 +56,7 @@ class StairController:
         foot_idx: int,
         current_pos: np.ndarray,
         target_base: np.ndarray,
+        terrain_height: float,
         in_stairs: bool,
     ) -> np.ndarray:
         """
@@ -69,6 +70,8 @@ class StairController:
             Current foot position
         target_base : np.ndarray
             Target base position
+        terrain_height : float
+            Current terrain height at foot location
         in_stairs : bool
             Whether robot is on stairs
             
@@ -78,12 +81,10 @@ class StairController:
             Adjusted foot target position
         """
         if not in_stairs:
-            return current_pos  # Use normal foot placement
+            return current_pos
         
-        # Adjust for stairs
         target = current_pos.copy()
         
-        # Lift foot higher for stair
-        target[2] = self.step_height + 0.05
+        target[2] = terrain_height + self.step_height + 0.05
         
         return target

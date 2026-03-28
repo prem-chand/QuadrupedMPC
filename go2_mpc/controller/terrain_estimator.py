@@ -22,9 +22,11 @@ class TerrainEstimator:
     - Surface normal vector
     """
 
-    def __init__(self):
-        self._contact_history = []
-        self._max_history = 10
+    def __init__(self, alpha: float = 0.1):
+        """Initialize with EMA smoothing factor."""
+        self._alpha = alpha
+        self._prev_slope_roll = 0.0
+        self._prev_slope_pitch = 0.0
 
     def estimate(
         self,
@@ -67,12 +69,22 @@ class TerrainEstimator:
         if len(stance_feet) >= 3:
             slope_roll, slope_pitch = self._estimate_slope(stance_feet)
             normal = self._estimate_normal(stance_feet)
+            
+            # Apply EMA smoothing
+            slope_roll = (1 - self._alpha) * self._prev_slope_roll + self._alpha * slope_roll
+            slope_pitch = (1 - self._alpha) * self._prev_slope_pitch + self._alpha * slope_pitch
+            self._prev_slope_roll = slope_roll
+            self._prev_slope_pitch = slope_pitch
         else:
-            slope_roll = 0.0
-            slope_pitch = 0.0
+            slope_roll = self._prev_slope_roll
+            slope_pitch = self._prev_slope_pitch
             normal = np.array([0, 0, 1])
         
-        height_per_foot = np.array([f[2] for f in foot_positions])
+        # Height per foot: only stance feet have valid terrain height
+        height_per_foot = np.full(4, np.nan)
+        for i in range(4):
+            if contact_schedule[i] > 0.5:
+                height_per_foot[i] = foot_positions[i][2]
         
         return {
             'height_per_foot': height_per_foot,
@@ -120,6 +132,11 @@ class TerrainEstimator:
         v2 = pts[2] - pts[0]
         
         normal = np.cross(v1, v2)
+        
+        # Ensure upward-facing normal
+        if normal[2] < 0:
+            normal = -normal
+        
         norm = np.linalg.norm(normal)
         
         if norm < 1e-6:

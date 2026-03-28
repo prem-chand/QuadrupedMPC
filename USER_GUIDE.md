@@ -59,6 +59,37 @@ step=100  t=0.100s  height=0.321m  mpc=0.078ms
 
 ---
 
+## Terrain Adaptation
+
+### Running on Rough Terrain
+
+```bash
+python main.py --scene rough_terrain
+```
+
+### Running on Stairs
+
+```bash
+python main.py --scene stairs
+```
+
+### Terrain Estimator
+
+The controller estimates terrain height and slope from stance feet:
+- Uses EMA smoothing (α=0.1) to prevent jitter
+- Computes surface normal from 3+ stance feet
+- Filters swing feet (airborne) from height estimation
+
+### Stair Controller
+
+When approaching stairs:
+- Detects stair region via x position (configurable `stair_start`)
+- Increases swing height (0.15m vs 0.08m normal)
+- Slows swing duration (0.3s vs 0.2s normal)
+- Adjusts foot target to terrain-relative height
+
+---
+
 ## Running Benchmarks
 
 ### QP Solver Benchmark
@@ -219,4 +250,4 @@ dependencies: mujoco, numpy, cvxpy, qpsolvers, quadprog, clarabel
 
 ---
 
-*Last updated: 2026-03-27*
+*Last updated: 2026-03-28*
