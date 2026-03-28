@@ -181,8 +181,10 @@ def create_log_entry(
     joint_q, joint_qd = robot.get_joint_state()
     
     foot_pos_world = np.array(robot.get_foot_positions_world())
-    foot_pos_body = np.array(robot.get_foot_positions_body())
-    foot_vel_world = np.array(robot.get_foot_velocity())
+    foot_vel_world = np.array([robot.get_foot_velocity(i) for i in range(4)])
+    
+    # Foot positions in body frame (world - base_pos)
+    foot_pos_body = foot_pos_world - base_pos
     
     contact_forces = np.array(robot.get_foot_forces())
     
