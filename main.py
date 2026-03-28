@@ -103,7 +103,8 @@ def main():
         dt=cfg.mpc.dt,
     )
 
-    wbc = WholeBodyController(robot, torque_limit=cfg.controller.torque_limit)
+    wbc = WholeBodyController(robot, torque_limit=cfg.controller.torque_limit, height_kp=80.0)
+    wbc.set_target_height(cfg.controller.default_height)
 
     controller = ControllerCore(
         gait=gait,
