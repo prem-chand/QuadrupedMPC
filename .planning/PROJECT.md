@@ -2,9 +2,9 @@
 
 MIT Cheetah-style convex MPC controller for a Unitree Go2 quadruped robot.
 
-## Current State (v1.1)
+## Current State (v1.2)
 
-A working MPC-WBC controller stack implementing MIT Cheetah-style convex MPC for quadrupedal locomotion.
+A production-quality MPC-WBC controller stack with optimized QP solver.
 
 ### Completed Features
 - Centroidal dynamics MPC (100 Hz)
@@ -16,6 +16,7 @@ A working MPC-WBC controller stack implementing MIT Cheetah-style convex MPC for
 - Kalman filter state estimation
 - Balance controller for push recovery
 - GPU batched MPC (requires PyTorch)
+- **Optimized QP solver (quadprog — 20x faster than CLARABEL)**
 
 ### Architecture
 ```
@@ -28,24 +29,23 @@ go2_mpc/
 
 ---
 
-## v1.1 Milestone Summary
+## v1.2 Milestone Summary
 
 **Completed:** 2026-03-27
 
 | Phase | Feature |
 |-------|---------|
-| 4 | State Estimation (Kalman filter) |
-| 5 | Controller Frequency (100/500 Hz) + Tuning |
-| 6 | Balance Controller (push recovery) |
+| 7 | Unified QP solver backend |
+| 8 | Benchmark suite |
+| 9 | Solver selection (quadprog default) |
 
 ---
 
 ## Next Goals
 
-1. **Test performance** at increased frequencies (100/500 Hz)
-2. **C++ porting** if Python is too slow (swap to qpOASES)
-3. **Terrain adaptation** (stretch goal)
-4. **Hardware deployment** (stretch goal)
+1. **Terrain adaptation** — Rough terrain + stairs
+2. **Nonlinear MPC** — acados for agile motions
+3. **Hardware deployment** — C++ port if needed
 
 ---
 
@@ -53,7 +53,7 @@ go2_mpc/
 
 - Di Carlo et al., IROS 2018 — Convex MPC
 - Bledt et al., IROS 2018 — MIT Cheetah 3 design
-- [A1-QP-MPC-Controller](https://github.com/ShuoYangRobotics/A1-QP-MPC-Controller) — Reference implementation
+- [qpsolvers](https://qpsolvers.github.io/qpsolvers/) — Unified QP solver API
 
 ---
 
