@@ -186,7 +186,7 @@ def create_log_entry(
     # Foot positions in body frame (world - base_pos)
     foot_pos_body = foot_pos_world - base_pos
     
-    contact_forces = np.array(robot.get_foot_forces())
+    # contact_forces not available in MuJoCoRobot - skip
     
     has_nan, error_msg = check_state(
         base_pos, base_quat, base_lin_vel, base_ang_vel,
@@ -207,7 +207,7 @@ def create_log_entry(
         foot_pos_body=foot_pos_body,
         foot_vel_world=foot_vel_world,
         contact_schedule=contact_schedule,
-        contact_forces=contact_forces,
+        contact_forces=np.zeros((4, 3)),  # Not available
         gait_phase=gait_phase,
         v_cmd=command.v_cmd_global,
         yaw_rate_cmd=command.yaw_rate,
