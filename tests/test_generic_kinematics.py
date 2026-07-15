@@ -211,3 +211,153 @@ def test_full_jacobian_base_angular_block_with_rotated_base(tmp_path):
         [-r[1], r[0], 0.0],
     ])
     np.testing.assert_allclose(J_full[:, 3:6], -skew_r @ R_base, atol=1e-9)
+
+
+_ONE_JOINT_WITH_MASS_URDF = """<?xml version="1.0"?>
+<robot name="r">
+  <link name="base"/>
+  <link name="foot">
+    <inertial>
+      <mass value="2.0"/>
+      <origin xyz="0.1 0 0" rpy="0 0 0"/>
+    </inertial>
+  </link>
+  <joint name="j1" type="revolute">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="base"/><child link="foot"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+</robot>
+"""
+
+
+def test_gravity_compensation_single_link_horizontal_arm(tmp_path):
+    path = _write(tmp_path, "arm.urdf", _ONE_JOINT_WITH_MASS_URDF)
+    kin = GenericKinematics(urdf_path=path, base_link="base", foot_links=["foot"])
+
+    # Joint axis is world Y, link CoM sits 0.1m along local X at q=0, so the
+    # arm points along world X: a static torque balancing gravity about the
+    # Y axis is expected. tau = cross(z=[0,1,0], r=[0.1,0,0]) . (m*mg) with
+    # mg = [0,0,+9.81] (matches Go2Kinematics' sign convention):
+    # cross([0,1,0],[0.1,0,0]) = [0*0-0*0, 0*0.1-0*0, 0*0-1*0.1] = [0,0,-0.1]
+    # tau = [0,0,-0.1] . [0,0,2.0*9.81] = -0.1 * 19.62 = -1.962
+    tau = kin.gravity_compensation(0, p_base=np.zeros(3), R_base=np.eye(3), q_leg=np.array([0.0]))
+    np.testing.assert_allclose(tau, [-1.962], atol=1e-6)
+
+
+def test_gravity_compensation_zero_when_arm_hangs_straight_down(tmp_path):
+    path = _write(tmp_path, "arm.urdf", _ONE_JOINT_WITH_MASS_URDF)
+    kin = GenericKinematics(urdf_path=path, base_link="base", foot_links=["foot"])
+
+    # Rotate -90deg about Y so the link's local +X (where the CoM sits)
+    # points along world -Z (hanging straight down) -- lever arm about the
+    # Y axis has zero moment, so gravity torque should vanish.
+    tau = kin.gravity_compensation(0, p_base=np.zeros(3), R_base=np.eye(3), q_leg=np.array([-np.pi / 2]))
+    np.testing.assert_allclose(tau, [0.0], atol=1e-9)
+
+
+# base -(j1, revolute, axis Y)-> mid (NO <inertial> at all) -(fixed_offset,
+# fixed, translation only)-> real_mass_link (the real 2.0kg mass). Mirrors
+# ANYmal's actual LF_HAA -> LF_HIP (0.001kg placeholder) -> LF_hip_fixed
+# (0.74kg real mass) pattern: the mass sits one `fixed`-joint hop past the
+# joint's immediate child, not on the immediate child itself.
+_INTERMEDIATE_FIXED_MASS_URDF = """<?xml version="1.0"?>
+<robot name="r">
+  <link name="base"/>
+  <link name="mid"/>
+  <link name="real_mass_link">
+    <inertial>
+      <mass value="2.0"/>
+      <origin xyz="0.0 0 0" rpy="0 0 0"/>
+    </inertial>
+  </link>
+  <joint name="j1" type="revolute">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="base"/><child link="mid"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+  <joint name="fixed_offset" type="fixed">
+    <origin xyz="0.1 0 0" rpy="0 0 0"/>
+    <parent link="mid"/><child link="real_mass_link"/>
+  </joint>
+</robot>
+"""
+
+
+def test_gravity_compensation_attributes_mass_on_intermediate_fixed_link(tmp_path):
+    path = _write(tmp_path, "arm.urdf", _INTERMEDIATE_FIXED_MASS_URDF)
+    kin = GenericKinematics(urdf_path=path, base_link="base", foot_links=["real_mass_link"])
+
+    # Same geometry as test_gravity_compensation_single_link_horizontal_arm
+    # (0.1m lever arm along X, 2.0kg, axis Y) so the expected torque is
+    # identical: -1.962 Nm. A design keyed only on j1's immediate child
+    # ("mid", which has no <inertial>) would wrongly compute zero here.
+    tau = kin.gravity_compensation(0, p_base=np.zeros(3), R_base=np.eye(3), q_leg=np.array([0.0]))
+    np.testing.assert_allclose(tau, [-1.962], atol=1e-6)
+
+
+# 2-joint leg where joint0 has TWO rigidly-attached links carrying mass:
+# its immediate child "mid" AND "mid2", reached via a fixed-joint hop that
+# sits SERIALLY on the path to the foot (mid -> [fixed] -> mid2 -> [j2] ->
+# foot), unlike a dead-end side branch. joint1's link "foot" is distal to
+# joint0. This is the coverage gap the brief's own gravity tests don't
+# reach: they use exactly one massed link per test and only ever one
+# actuated joint. A design that dropped all but the first entry of
+# rigid_links, or that failed to accumulate a distal joint's mass into a
+# proximal joint's torque, would still pass those tests but fail here.
+_TWO_JOINT_MULTI_LINK_URDF = """<?xml version="1.0"?>
+<robot name="r">
+  <link name="base"/>
+  <link name="mid">
+    <inertial>
+      <mass value="1.0"/>
+      <origin xyz="0.05 0 0" rpy="0 0 0"/>
+    </inertial>
+  </link>
+  <link name="mid2">
+    <inertial>
+      <mass value="0.5"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </inertial>
+  </link>
+  <link name="foot">
+    <inertial>
+      <mass value="2.0"/>
+      <origin xyz="0.05 0 0" rpy="0 0 0"/>
+    </inertial>
+  </link>
+  <joint name="j1" type="revolute">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="base"/><child link="mid"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+  <joint name="mid_fixed_hop" type="fixed">
+    <origin xyz="0.02 0 0" rpy="0 0 0"/>
+    <parent link="mid"/><child link="mid2"/>
+  </joint>
+  <joint name="j2" type="revolute">
+    <origin xyz="0.08 0 0" rpy="0 0 0"/>
+    <parent link="mid2"/><child link="foot"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+</robot>
+"""
+
+
+def test_gravity_compensation_sums_multiple_rigid_links_and_distal_joint(tmp_path):
+    path = _write(tmp_path, "arm.urdf", _TWO_JOINT_MULTI_LINK_URDF)
+    kin = GenericKinematics(urdf_path=path, base_link="base", foot_links=["foot"])
+
+    # At q=[0,0], with axis Y on both joints:
+    #   p_com_mid  = (0.05, 0, 0), m=1.0, owned by joint0
+    #   p_com_mid2 = (0.02, 0, 0), m=0.5, owned by joint0 (fixed hop, serial)
+    #   p_com_foot = (0.15, 0, 0), m=2.0, owned by joint1
+    # tau[1] sums only foot (owning_k=1 >= 1):
+    #   cross([0,1,0],[0.05,0,0]).(2.0*[0,0,9.81]) = -0.05*19.62 = -0.981
+    # tau[0] sums mid + mid2 + foot (all owning_k >= 0):
+    #   mid:  -0.05*9.81  = -0.4905
+    #   mid2: -0.02*4.905 = -0.0981
+    #   foot: -0.15*19.62 = -2.943
+    #   total = -3.5316
+    tau = kin.gravity_compensation(0, p_base=np.zeros(3), R_base=np.eye(3), q_leg=np.array([0.0, 0.0]))
+    np.testing.assert_allclose(tau, [-3.5316, -0.981], atol=1e-6)

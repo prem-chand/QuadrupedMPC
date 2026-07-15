@@ -142,3 +142,57 @@ class GenericKinematics:
         J_leg = self.leg_jacobian(leg_idx, p_base, R_base, q_leg)
 
         return v_base + np.cross(omega_world, p_foot - p_base) + J_leg @ qd_leg
+
+    # ------------------------------------------------------------------
+    # Gravity compensation
+    # ------------------------------------------------------------------
+
+    def gravity_compensation(self, leg_idx, p_base, R_base, q_leg):
+        """
+        Static gravity compensation torques for one leg. Shape: (n_joints,).
+
+        tau[j] = sum over links distal to joint j of:
+                   cross(z_j, p_link_com_world - p_joint_j) . (m_link * mg_world)
+
+        mg_world = -self._gravity, matching Go2Kinematics' MuJoCo qfrc_bias
+        sign convention. Coriolis/centrifugal terms are NOT included (same
+        static-only approximation Go2Kinematics makes).
+
+        Each actuated joint may have MULTIPLE rigidly-attached links (its
+        own immediate child, plus any further `fixed`-jointed descendants
+        -- see ChainJoint.rigid_links in kinematic_chain.py), since real
+        URDFs commonly put the actual link mass on such a descendant
+        rather than the immediate child.
+        """
+        chain = self._chains[leg_idx]
+        fk = self.forward_kinematics(leg_idx, p_base, R_base, q_leg)
+        joint_frames = fk["joint_frames"]
+        mg_world = -self._gravity
+
+        # Flatten every rigidly-attached link (across all joints) into
+        # (owning_joint_index, mass, world-frame CoM position).
+        link_mass_com = []
+        for k, cj in enumerate(chain.joints):
+            jf = joint_frames[k]
+            R_after_own_rotation = jf["R"] @ axis_angle_to_matrix(cj.axis, q_leg[k])
+            T_joint_post = np.eye(4)
+            T_joint_post[:3, :3] = R_after_own_rotation
+            T_joint_post[:3, 3] = jf["p"]
+
+            for link_name, transform in cj.rigid_links:
+                link = self._tree.links[link_name]
+                if link.inertial is None:
+                    continue
+                T_link_world = T_joint_post @ transform
+                p_com_world = T_link_world[:3, 3] + T_link_world[:3, :3] @ link.inertial.com
+                link_mass_com.append((k, link.inertial.mass, p_com_world))
+
+        n = len(chain.joints)
+        tau = np.zeros(n, dtype=np.float64)
+        for j in range(n):
+            z_j, p_j = joint_frames[j]["z"], joint_frames[j]["p"]
+            for owning_k, m, p_com in link_mass_com:
+                if owning_k < j:
+                    continue
+                tau[j] += np.cross(z_j, p_com - p_j) @ (m * mg_world)
+        return tau
