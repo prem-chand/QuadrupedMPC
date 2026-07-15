@@ -64,6 +64,18 @@ _ZERO_AXIS_URDF = """<?xml version="1.0"?>
 </robot>
 """
 
+_MISSING_PARENT_LINK_ATTR_URDF = """<?xml version="1.0"?>
+<robot name="missing_link_attr">
+  <link name="base"/>
+  <link name="link1"/>
+  <joint name="joint1" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent/>
+    <child link="link1"/>
+  </joint>
+</robot>
+"""
+
 
 def _write(tmp_path, name, content):
     p = tmp_path / name
@@ -121,5 +133,11 @@ def test_ambiguous_root_raises_urdf_parse_error(tmp_path):
 
 def test_zero_length_axis_raises_urdf_parse_error(tmp_path):
     path = _write(tmp_path, "bad_axis.urdf", _ZERO_AXIS_URDF)
+    with pytest.raises(URDFParseError):
+        parse_urdf(path)
+
+
+def test_missing_parent_link_attribute_raises_urdf_parse_error(tmp_path):
+    path = _write(tmp_path, "missing_link_attr.urdf", _MISSING_PARENT_LINK_ATTR_URDF)
     with pytest.raises(URDFParseError):
         parse_urdf(path)

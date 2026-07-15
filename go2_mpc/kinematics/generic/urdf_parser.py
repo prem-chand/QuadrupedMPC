@@ -99,6 +99,8 @@ def parse_urdf(path) -> KinematicTree:
             raise URDFParseError(f"{path}: joint '{name}' missing <parent> or <child>")
         parent = parent_el.get("link")
         child = child_el.get("link")
+        if parent is None or child is None:
+            raise URDFParseError(f"{path}: joint '{name}' <parent>/<child> missing 'link' attribute")
 
         origin_el = joint_el.find("origin")
         origin_xyz = _parse_vec3(origin_el.get("xyz") if origin_el is not None else None)
