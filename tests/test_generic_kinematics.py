@@ -174,3 +174,40 @@ def test_full_jacobian_base_blocks_and_leg_columns(tmp_path):
 
     # All other legs' columns (9:18) are zero for a single-leg query.
     np.testing.assert_allclose(J_full[:, 9:18], np.zeros((3, 9)), atol=1e-12)
+
+
+def test_leg_jacobian_matches_finite_difference_with_rotated_base(tmp_path):
+    kin = _make_leg_kin(tmp_path)
+    q0 = np.array([0.2, -0.3, 0.4])
+    p_base = np.zeros(3)
+    R_base = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])  # 90deg yaw
+
+    J = kin.leg_jacobian(0, p_base, R_base, q0)
+
+    eps = 1e-6
+    J_fd = np.zeros((3, 3))
+    for k in range(3):
+        dq = np.zeros(3)
+        dq[k] = eps
+        p_plus = kin.foot_position_world(0, p_base, R_base, q0 + dq)
+        p_minus = kin.foot_position_world(0, p_base, R_base, q0 - dq)
+        J_fd[:, k] = (p_plus - p_minus) / (2 * eps)
+
+    np.testing.assert_allclose(J, J_fd, atol=1e-6)
+
+
+def test_full_jacobian_base_angular_block_with_rotated_base(tmp_path):
+    kin = _make_leg_kin(tmp_path)
+    q_leg = np.array([0.1, 0.2, -0.15])
+    p_base = np.zeros(3)
+    R_base = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])  # 90deg yaw
+
+    J_full = kin.full_jacobian(0, p_base, R_base, q_leg)
+    p_foot = kin.foot_position_world(0, p_base, R_base, q_leg)
+    r = p_foot - p_base
+    skew_r = np.array([
+        [0.0, -r[2], r[1]],
+        [r[2], 0.0, -r[0]],
+        [-r[1], r[0], 0.0],
+    ])
+    np.testing.assert_allclose(J_full[:, 3:6], -skew_r @ R_base, atol=1e-9)
