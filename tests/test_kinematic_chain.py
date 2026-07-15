@@ -139,6 +139,28 @@ def test_trailing_fixed_joint_becomes_foot_offset(tmp_path):
     np.testing.assert_allclose(chain.foot_offset_transform[:3, :3], np.eye(3), atol=1e-9)
 
 
+def test_rigid_links_captures_intermediate_and_trailing_links(tmp_path):
+    tree = parse_urdf(_write(tmp_path, "r.urdf", _MIXED_URDF))
+    chain = build_leg_chains(tree, base_link="base", foot_links=["foot"])[0]
+
+    j1, j2 = chain.joints
+
+    # j1's own immediate child is "mid" -- recorded at transform=identity
+    # (relative to j1's own post-rotation frame).
+    assert [name for name, _ in j1.rigid_links] == ["mid", "pre_foot"]
+    np.testing.assert_allclose(j1.rigid_links[0][1], np.eye(4), atol=1e-12)
+    # "pre_foot" is reached via fixed_rot (90deg yaw, zero translation) from
+    # "mid" -- rotation-only offset relative to j1's own frame.
+    np.testing.assert_allclose(j1.rigid_links[1][1][:3, :3],
+                                [[0, -1, 0], [1, 0, 0], [0, 0, 1]], atol=1e-9)
+
+    # j2's own immediate child is "post", plus the trailing fixed_trans link
+    # "foot" -- both must be present, not just the immediate child.
+    assert [name for name, _ in j2.rigid_links] == ["post", "foot"]
+    np.testing.assert_allclose(j2.rigid_links[0][1], np.eye(4), atol=1e-12)
+    np.testing.assert_allclose(j2.rigid_links[1][1][:3, 3], [0.2, 0.0, 0.0], atol=1e-9)
+
+
 def test_missing_foot_link_raises(tmp_path):
     tree = parse_urdf(_write(tmp_path, "r.urdf", _NO_FIXED_URDF))
     with pytest.raises(URDFTopologyError):
