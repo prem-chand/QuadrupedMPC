@@ -450,13 +450,15 @@ git commit -m "feat: add minimal URDF parser for generic kinematics engine"
 
 This is the trickiest correctness point in the whole engine: a URDF frequently has (a) `fixed` joints *between* two actuated joints whose `rpy` is **not** zero (this reorients the next actuated joint's effective world-frame axis — ANYmal's URDF does this for every leg joint), and (b) a trailing `fixed` joint *after* the last actuated joint down to the actual foot/toe frame (Go2's URDF does exactly this: `FL_foot_joint` is `fixed`, child of `FL_calf`, translating `(0,0,-0.213)` to reach `FL_foot`). Both must be composed via full 4×4 transforms, not naive angle addition, and the trailing case needs its own field since there's no "next actuated joint" to attach it to.
 
+There's a second, independent reason fixed joints must be tracked carefully, not just folded away: **mass attribution for gravity compensation (Task 5)**. Real URDFs commonly put a joint's actual link mass on a `fixed`-jointed descendant, not on the joint's immediate child — confirmed in ANYmal's actual URDF: the `LF_HAA` revolute joint's immediate child link is `LF_HIP` (mass `0.001` kg, a near-massless placeholder), while the real mass (`0.74` kg, non-trivial CoM offset) sits on `LF_hip_fixed`, one further `fixed` joint away. A design that only recorded a joint's immediate child link would silently drop that mass from gravity compensation. `ChainJoint.rigid_links` (below) fixes this by recording *every* link rigidly attached to a given joint, however many `fixed`-joint hops away.
+
 **Files:**
 - Create: `go2_mpc/kinematics/generic/kinematic_chain.py`
 - Test: `tests/test_kinematic_chain.py`
 
 **Interfaces:**
 - Consumes: `KinematicTree`, `Joint` from Task 2 (`go2_mpc.kinematics.generic.urdf_parser`); `make_transform` from Task 1 (`go2_mpc.kinematics.generic.transforms`).
-- Produces: `URDFTopologyError`, `UnsupportedJointTypeError` (Exceptions); `ChainJoint(joint_name: str, child_link: str, axis: np.ndarray, offset_transform: np.ndarray)`, `KinematicChain(foot_link: str, joints: list[ChainJoint], foot_offset_transform: np.ndarray)` (dataclasses); `build_leg_chains(tree: KinematicTree, base_link: str, foot_links: list[str]) -> list[KinematicChain]`. Consumed by Task 4.
+- Produces: `URDFTopologyError`, `UnsupportedJointTypeError` (Exceptions); `ChainJoint(joint_name: str, axis: np.ndarray, offset_transform: np.ndarray, rigid_links: list = <default empty list>)` where `rigid_links` is `list[tuple[str, np.ndarray]]` — every link rigidly attached to this joint (its own immediate child at transform=identity, plus any further `fixed`-jointed descendants, each transform relative to this joint's own post-rotation frame); `KinematicChain(foot_link: str, joints: list[ChainJoint], foot_offset_transform: np.ndarray)` (dataclasses); `build_leg_chains(tree: KinematicTree, base_link: str, foot_links: list[str]) -> list[KinematicChain]`. Consumed by Task 4 (which only uses `joint_name`/`axis`/`offset_transform`) and Task 5 (which uses `rigid_links`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -589,6 +591,28 @@ def test_trailing_fixed_joint_becomes_foot_offset(tmp_path):
     np.testing.assert_allclose(chain.foot_offset_transform[:3, :3], np.eye(3), atol=1e-9)
 
 
+def test_rigid_links_captures_intermediate_and_trailing_links(tmp_path):
+    tree = parse_urdf(_write(tmp_path, "r.urdf", _MIXED_URDF))
+    chain = build_leg_chains(tree, base_link="base", foot_links=["foot"])[0]
+
+    j1, j2 = chain.joints
+
+    # j1's own immediate child is "mid" -- recorded at transform=identity
+    # (relative to j1's own post-rotation frame).
+    assert [name for name, _ in j1.rigid_links] == ["mid", "pre_foot"]
+    np.testing.assert_allclose(j1.rigid_links[0][1], np.eye(4), atol=1e-12)
+    # "pre_foot" is reached via fixed_rot (90deg yaw, zero translation) from
+    # "mid" -- rotation-only offset relative to j1's own frame.
+    np.testing.assert_allclose(j1.rigid_links[1][1][:3, :3],
+                                [[0, -1, 0], [1, 0, 0], [0, 0, 1]], atol=1e-9)
+
+    # j2's own immediate child is "post", plus the trailing fixed_trans link
+    # "foot" -- both must be present, not just the immediate child.
+    assert [name for name, _ in j2.rigid_links] == ["post", "foot"]
+    np.testing.assert_allclose(j2.rigid_links[0][1], np.eye(4), atol=1e-12)
+    np.testing.assert_allclose(j2.rigid_links[1][1][:3, 3], [0.2, 0.0, 0.0], atol=1e-9)
+
+
 def test_missing_foot_link_raises(tmp_path):
     tree = parse_urdf(_write(tmp_path, "r.urdf", _NO_FIXED_URDF))
     with pytest.raises(URDFTopologyError):
@@ -648,11 +672,24 @@ _FIXED_TYPES = ("fixed",)
 @dataclass
 class ChainJoint:
     joint_name: str
-    child_link: str          # link this joint moves -- needed to look up mass/CoM later
     axis: np.ndarray          # (3,) unit vector, in this joint's own local frame
     offset_transform: np.ndarray  # (4,4) static transform from the previous actuated
                                    # joint's frame (or base) up to this joint's frame,
                                    # BEFORE this joint's own DOF rotation is applied
+    rigid_links: list = field(default_factory=list)
+    # list[(link_name: str, transform: np.ndarray (4,4))] -- EVERY link
+    # rigidly attached to this joint: its own immediate child link (at
+    # transform=I, relative to this joint's own POST-rotation frame), plus
+    # any further links reached by a chain of `fixed` joints before the
+    # next actuated joint (or the foot). Real URDFs commonly put the joint's
+    # actual mass on such a fixed-jointed descendant, not on the immediate
+    # child -- e.g. ANYmal's LF_HAA (revolute) moves link "LF_HIP" (a
+    # near-massless 0.001kg placeholder), while the real 0.74kg mass sits on
+    # "LF_hip_fixed", one `fixed` joint further out. A design that only
+    # tracked the immediate child link would silently drop that mass from
+    # gravity compensation. `rigid_links` fixes this by capturing every
+    # link rigidly attached to a given DOF, however many fixed-joint hops
+    # away, each with its own transform back to that joint's frame.
 
 
 @dataclass
@@ -692,9 +729,16 @@ def build_leg_chains(tree: KinematicTree, base_link: str, foot_links: list) -> l
         pending_T = np.eye(4)
         for joint in path_joints:
             joint_T = make_transform(joint.origin_xyz, joint.origin_rpy)
+            pending_T = pending_T @ joint_T
 
             if joint.joint_type in _FIXED_TYPES:
-                pending_T = pending_T @ joint_T
+                # This fixed joint's child link is rigidly attached to the
+                # most recently emitted actuated joint (if any -- fixed
+                # joints between base and the FIRST actuated joint carry no
+                # ChainJoint to attach to, and their mass is correctly the
+                # base's concern, not this leg's).
+                if chain_joints:
+                    chain_joints[-1].rigid_links.append((joint.child, pending_T.copy()))
                 continue
 
             if joint.joint_type not in _ACTUATED_TYPES:
@@ -705,11 +749,14 @@ def build_leg_chains(tree: KinematicTree, base_link: str, foot_links: list) -> l
 
             chain_joints.append(ChainJoint(
                 joint_name=joint.name,
-                child_link=joint.child,
                 axis=joint.axis,
-                offset_transform=pending_T @ joint_T,
+                offset_transform=pending_T.copy(),
             ))
+            # Reset to accumulate the NEW joint's own rigid attachments,
+            # starting with its own immediate child link at transform=I
+            # (relative to this joint's own post-rotation frame).
             pending_T = np.eye(4)
+            chain_joints[-1].rigid_links.append((joint.child, np.eye(4)))
 
         # Anything left in pending_T is fixed joints AFTER the last actuated
         # joint -- e.g. a foot/toe frame. Do not drop this silently.
@@ -725,7 +772,7 @@ def build_leg_chains(tree: KinematicTree, base_link: str, foot_links: list) -> l
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_kinematic_chain.py -v`
-Expected: PASS (6 tests)
+Expected: PASS (7 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -1018,12 +1065,14 @@ git commit -m "feat: add GenericKinematics forward kinematics and Jacobians"
 
 Mirrors `Go2Kinematics.gravity_compensation`'s formula exactly: `tau[j] = sum over links distal to joint j of cross(z_j, p_link_com_world - p_joint_j) @ (m_link * mg_world)`, where `mg_world = -gravity` (matches the existing code's sign convention so it lines up with MuJoCo's `qfrc_bias`). The one thing this version doesn't have to do that `go2_kinematics.py` does: manually transcribe `HIP_COM`/`THIGH_COM`/`CALF_COM` arrays — mass and CoM come straight from each link's URDF `<inertial>` tag, parsed in Task 2.
 
+Unlike a first-draft version of this task, this one must sum over **every** link in `ChainJoint.rigid_links`, not just a joint's immediate child — real URDFs commonly put the actual mass on a `fixed`-jointed descendant (confirmed in ANYmal's own URDF: `LF_HAA`'s immediate child `LF_HIP` has a placeholder `0.001` kg mass, while the real `0.74` kg sits on `LF_hip_fixed`, one `fixed` joint further out). A design keyed only on the immediate child would silently drop that mass.
+
 **Files:**
 - Modify: `go2_mpc/kinematics/generic/generic_kinematics.py` (add method to the same class)
 - Modify: `tests/test_generic_kinematics.py` (add tests)
 
 **Interfaces:**
-- Consumes: `self._tree.links[name].inertial` (mass, com) from Task 2; `self._chains[leg_idx].joints[k].child_link` from Task 3.
+- Consumes: `self._tree.links[name].inertial` (mass, com) from Task 2; `self._chains[leg_idx].joints[k].rigid_links` (`list[tuple[str, np.ndarray]]`) from Task 3.
 - Produces: `GenericKinematics.gravity_compensation(leg_idx, p_base, R_base, q_leg) -> np.ndarray (3,)`. Consumed by Task 6 (`MujocoRobot`).
 
 - [ ] **Step 1: Write the failing tests**
@@ -1072,6 +1121,46 @@ def test_gravity_compensation_zero_when_arm_hangs_straight_down(tmp_path):
     # Y axis has zero moment, so gravity torque should vanish.
     tau = kin.gravity_compensation(0, p_base=np.zeros(3), R_base=np.eye(3), q_leg=np.array([-np.pi / 2]))
     np.testing.assert_allclose(tau, [0.0], atol=1e-9)
+
+
+# base -(j1, revolute, axis Y)-> mid (NO <inertial> at all) -(fixed_offset,
+# fixed, translation only)-> real_mass_link (the real 2.0kg mass). Mirrors
+# ANYmal's actual LF_HAA -> LF_HIP (0.001kg placeholder) -> LF_hip_fixed
+# (0.74kg real mass) pattern: the mass sits one `fixed`-joint hop past the
+# joint's immediate child, not on the immediate child itself.
+_INTERMEDIATE_FIXED_MASS_URDF = """<?xml version="1.0"?>
+<robot name="r">
+  <link name="base"/>
+  <link name="mid"/>
+  <link name="real_mass_link">
+    <inertial>
+      <mass value="2.0"/>
+      <origin xyz="0.0 0 0" rpy="0 0 0"/>
+    </inertial>
+  </link>
+  <joint name="j1" type="revolute">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="base"/><child link="mid"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+  <joint name="fixed_offset" type="fixed">
+    <origin xyz="0.1 0 0" rpy="0 0 0"/>
+    <parent link="mid"/><child link="real_mass_link"/>
+  </joint>
+</robot>
+"""
+
+
+def test_gravity_compensation_attributes_mass_on_intermediate_fixed_link(tmp_path):
+    path = _write(tmp_path, "arm.urdf", _INTERMEDIATE_FIXED_MASS_URDF)
+    kin = GenericKinematics(urdf_path=path, base_link="base", foot_links=["real_mass_link"])
+
+    # Same geometry as test_gravity_compensation_single_link_horizontal_arm
+    # (0.1m lever arm along X, 2.0kg, axis Y) so the expected torque is
+    # identical: -1.962 Nm. A design keyed only on j1's immediate child
+    # ("mid", which has no <inertial>) would wrongly compute zero here.
+    tau = kin.gravity_compensation(0, p_base=np.zeros(3), R_base=np.eye(3), q_leg=np.array([0.0]))
+    np.testing.assert_allclose(tau, [-1.962], atol=1e-6)
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1098,40 +1187,51 @@ Add to `go2_mpc/kinematics/generic/generic_kinematics.py`, inside the `GenericKi
         mg_world = -self._gravity, matching Go2Kinematics' MuJoCo qfrc_bias
         sign convention. Coriolis/centrifugal terms are NOT included (same
         static-only approximation Go2Kinematics makes).
+
+        Each actuated joint may have MULTIPLE rigidly-attached links (its
+        own immediate child, plus any further `fixed`-jointed descendants
+        -- see ChainJoint.rigid_links in kinematic_chain.py), since real
+        URDFs commonly put the actual link mass on such a descendant
+        rather than the immediate child.
         """
         chain = self._chains[leg_idx]
         fk = self.forward_kinematics(leg_idx, p_base, R_base, q_leg)
         joint_frames = fk["joint_frames"]
         mg_world = -self._gravity
 
-        # World-frame CoM position of the link each joint moves.
+        # Flatten every rigidly-attached link (across all joints) into
+        # (owning_joint_index, mass, world-frame CoM position).
         link_mass_com = []
         for k, cj in enumerate(chain.joints):
             jf = joint_frames[k]
-            link = self._tree.links[cj.child_link]
-            if link.inertial is None:
-                link_mass_com.append((0.0, jf["p"]))
-                continue
             R_after_own_rotation = jf["R"] @ axis_angle_to_matrix(cj.axis, q_leg[k])
-            p_com_world = jf["p"] + R_after_own_rotation @ link.inertial.com
-            link_mass_com.append((link.inertial.mass, p_com_world))
+            T_joint_post = np.eye(4)
+            T_joint_post[:3, :3] = R_after_own_rotation
+            T_joint_post[:3, 3] = jf["p"]
+
+            for link_name, transform in cj.rigid_links:
+                link = self._tree.links[link_name]
+                if link.inertial is None:
+                    continue
+                T_link_world = T_joint_post @ transform
+                p_com_world = T_link_world[:3, 3] + T_link_world[:3, :3] @ link.inertial.com
+                link_mass_com.append((k, link.inertial.mass, p_com_world))
 
         n = len(chain.joints)
         tau = np.zeros(n, dtype=np.float64)
         for j in range(n):
             z_j, p_j = joint_frames[j]["z"], joint_frames[j]["p"]
-            for k in range(j, n):
-                m_k, p_com_k = link_mass_com[k]
-                if m_k == 0.0:
+            for owning_k, m, p_com in link_mass_com:
+                if owning_k < j:
                     continue
-                tau[j] += np.cross(z_j, p_com_k - p_j) @ (m_k * mg_world)
+                tau[j] += np.cross(z_j, p_com - p_j) @ (m * mg_world)
         return tau
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_generic_kinematics.py -v`
-Expected: PASS (7 tests)
+Expected: PASS (8 tests)
 
 - [ ] **Step 5: Commit**
 
