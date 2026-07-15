@@ -49,12 +49,12 @@ class MujocoRobot(Robot):
         Simulation data buffer associated with *model*.
     """
 
-    def __init__(self, model, data):
+    def __init__(self, model, data, kinematics=None):
         self.model = model
         self.data = data
 
         # Analytical kinematics — no MuJoCo kinematics API needed.
-        self._kin = Go2Kinematics()
+        self._kin = kinematics if kinematics is not None else Go2Kinematics()
 
     # ==========================
     # Simulation
