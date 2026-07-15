@@ -89,3 +89,88 @@ def test_foot_velocity_matches_finite_difference_time_derivative(tmp_path):
     v_fd = (p_plus - p_minus) / (2 * dt)
 
     np.testing.assert_allclose(v_analytic, v_fd, atol=1e-4)
+
+
+# 3-joint leg with hip(axis X)/thigh(axis Y)/calf(axis Y) joints plus a
+# trailing fixed foot joint -- mirrors real quadruped leg topology (Go2)
+# closely enough to exercise full_jacobian's fixed 3-DOF-per-leg column
+# layout and forward_kinematics' foot_offset_transform path, neither of
+# which the 2-joint planar fixture above can reach.
+_THREE_JOINT_WITH_FOOT_OFFSET_URDF = """<?xml version="1.0"?>
+<robot name="leg">
+  <link name="base"/>
+  <link name="hip"/>
+  <link name="thigh"/>
+  <link name="calf"/>
+  <link name="foot"/>
+  <joint name="hip_joint" type="revolute">
+    <origin xyz="0.2 0.1 0" rpy="0 0 0"/>
+    <parent link="base"/><child link="hip"/>
+    <axis xyz="1 0 0"/>
+  </joint>
+  <joint name="thigh_joint" type="revolute">
+    <origin xyz="0 0.05 0" rpy="0 0 0"/>
+    <parent link="hip"/><child link="thigh"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+  <joint name="calf_joint" type="revolute">
+    <origin xyz="0 0 -0.3" rpy="0 0 0"/>
+    <parent link="thigh"/><child link="calf"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+  <joint name="foot_joint" type="fixed">
+    <origin xyz="0 0 -0.3" rpy="0 0 0"/>
+    <parent link="calf"/><child link="foot"/>
+  </joint>
+</robot>
+"""
+
+
+def _make_leg_kin(tmp_path):
+    path = _write(tmp_path, "leg.urdf", _THREE_JOINT_WITH_FOOT_OFFSET_URDF)
+    return GenericKinematics(urdf_path=path, base_link="base", foot_links=["foot"])
+
+
+def test_foot_position_includes_trailing_fixed_offset(tmp_path):
+    kin = _make_leg_kin(tmp_path)
+    p_foot = kin.foot_position_world(0, p_base=np.zeros(3), R_base=np.eye(3), q_leg=np.zeros(3))
+    # base -> hip (0.2,0.1,0) -> thigh (0,0.05,0) -> calf (0,0,-0.3, via
+    # calf_joint's own origin) -> foot (0,0,-0.3, via the TRAILING fixed
+    # foot_joint -- must not be dropped).
+    np.testing.assert_allclose(p_foot, [0.2, 0.15, -0.6], atol=1e-9)
+
+
+def test_foot_position_rotates_with_nonidentity_base_orientation(tmp_path):
+    kin = _make_leg_kin(tmp_path)
+    # 90deg yaw base orientation: Rz(90) @ [0.2, 0.15, -0.6]
+    R_base = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    p_foot = kin.foot_position_world(0, p_base=np.zeros(3), R_base=R_base, q_leg=np.zeros(3))
+    np.testing.assert_allclose(p_foot, [-0.15, 0.2, -0.6], atol=1e-9)
+
+
+def test_full_jacobian_base_blocks_and_leg_columns(tmp_path):
+    kin = _make_leg_kin(tmp_path)
+    p_base, R_base, q_leg = np.zeros(3), np.eye(3), np.zeros(3)
+
+    J_full = kin.full_jacobian(0, p_base, R_base, q_leg)
+    assert J_full.shape == (3, 18)
+
+    # Base linear block: identity.
+    np.testing.assert_allclose(J_full[:, 0:3], np.eye(3), atol=1e-12)
+
+    # Base angular block: -skew(r) @ R_base, r = p_foot - p_base.
+    p_foot = kin.foot_position_world(0, p_base, R_base, q_leg)
+    r = p_foot - p_base
+    skew_r = np.array([
+        [0.0, -r[2], r[1]],
+        [r[2], 0.0, -r[0]],
+        [-r[1], r[0], 0.0],
+    ])
+    np.testing.assert_allclose(J_full[:, 3:6], -skew_r @ R_base, atol=1e-9)
+
+    # Leg columns (leg 0 -> qvel cols 6:9) must match leg_jacobian exactly.
+    J_leg = kin.leg_jacobian(0, p_base, R_base, q_leg)
+    np.testing.assert_allclose(J_full[:, 6:9], J_leg, atol=1e-12)
+
+    # All other legs' columns (9:18) are zero for a single-leg query.
+    np.testing.assert_allclose(J_full[:, 9:18], np.zeros((3, 9)), atol=1e-12)
