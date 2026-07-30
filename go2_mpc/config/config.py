@@ -121,9 +121,9 @@ def default_config() -> SystemConfig:
         ),
         mpc=MPCConfig(
             mass=15.2,
-            inertia=np.diag([0.18, 0.35, 0.3]),
+            inertia=np.diag([0.1, 0.1, 0.05]),  # Fixed: Izz > Ixx (was [0.18, 0.35, 0.3])
             horizon=10,
-            dt=0.01,  # 100 Hz MPC (was 0.03 = 33 Hz)
+            dt=0.03,  # 33 Hz MPC, 0.3s horizon
             Q=np.diag([5, 5, 50, 20, 20, 10, 8, 8, 15, 15, 5, 3]),  # Tuned for Go2
             R=np.diag([1e-3] * 12),
             mu=0.6,
@@ -131,7 +131,7 @@ def default_config() -> SystemConfig:
         ),
         gait=GaitConfig(
             gait_period=0.45,
-            stance_ratio=0.65,
+            stance_ratio=0.65,  # Default trot stance ratio
         ),
         controller=ControllerConfig(
             mpc_decimation=10,      # 100 Hz MPC (sim_dt * 10 = 0.01s)
