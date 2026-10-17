@@ -36,3 +36,10 @@ debug/
 .DS_Store
 CLAUDE.md
 *.log
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# Local Claude settings and agent worktree checkouts.
+.claude/settings.local.json
+.claude/worktrees/
