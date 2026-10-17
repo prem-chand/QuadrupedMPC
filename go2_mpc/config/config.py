@@ -134,7 +134,11 @@ def default_config() -> SystemConfig:
             stance_ratio=0.65,  # Default trot stance ratio
         ),
         controller=ControllerConfig(
-            mpc_decimation=10,      # 100 Hz MPC (sim_dt * 10 = 0.01s)
+            # ControllerCore applies this ON TOP OF its own control_decimation
+            # (sim_dt * 10 = 100 Hz low-freq loop, hardcoded in controller_manager.py).
+            # 10 here means MPC solves every 10th low-freq call -> 10 Hz, not 100 Hz
+            # as the old comment claimed. 1 = solve every low-freq call = true 100 Hz.
+            mpc_decimation=1,
             force_control_decimation=2,  # 500 Hz force control
             motion_control_decimation=2,  # 500 Hz motion control
             force_smooth_alpha=0.1,
